@@ -72,3 +72,4 @@ To have Beacon start automatically:
 
 MIT
 # claude-code-beacon
+# claude-code-beacon
