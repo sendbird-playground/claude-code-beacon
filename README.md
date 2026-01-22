@@ -71,3 +71,4 @@ To have Beacon start automatically:
 ## License
 
 MIT
+# claude-code-beacon
