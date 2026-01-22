@@ -127,6 +127,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        // Hook management section
+        let hookManager = HookManager.shared
+        if hookManager.isHookInstalled {
+            let hookStatus = NSMenuItem(title: "✓ Hooks Installed", action: nil, keyEquivalent: "")
+            hookStatus.isEnabled = false
+            menu.addItem(hookStatus)
+
+            let reinstallItem = NSMenuItem(title: "Reinstall Hooks", action: #selector(reinstallHooks), keyEquivalent: "")
+            reinstallItem.target = self
+            menu.addItem(reinstallItem)
+
+            let uninstallItem = NSMenuItem(title: "Uninstall Hooks", action: #selector(uninstallHooks), keyEquivalent: "")
+            uninstallItem.target = self
+            menu.addItem(uninstallItem)
+        } else {
+            let installItem = NSMenuItem(title: "⚡ Install Hooks (Rich Alerts)", action: #selector(installHooks), keyEquivalent: "")
+            installItem.target = self
+            menu.addItem(installItem)
+        }
+
+        menu.addItem(NSMenuItem.separator())
+
         let quitItem = NSMenuItem(title: "Quit Beacon", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -286,6 +308,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func quit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    // MARK: - Hook Management
+
+    @objc func installHooks() {
+        let result = HookManager.shared.installHooks()
+        showAlert(title: result.success ? "Success" : "Error", message: result.message)
+        updateMenu()
+    }
+
+    @objc func reinstallHooks() {
+        let result = HookManager.shared.installHooks()
+        showAlert(title: result.success ? "Success" : "Error", message: result.message)
+        updateMenu()
+    }
+
+    @objc func uninstallHooks() {
+        let result = HookManager.shared.uninstallHooks()
+        showAlert(title: result.success ? "Success" : "Error", message: result.message)
+        updateMenu()
+    }
+
+    func showAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = title == "Error" ? .warning : .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
 
