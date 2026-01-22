@@ -65,20 +65,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 menu.addItem(NSMenuItem.separator())
             }
 
-            // Recent sessions (completed, snoozed, acknowledged - most recent first)
-            let recent = sessions.filter { $0.status != .running }
+            // Recent sessions - only show sessions that actually completed (got notifications)
+            let recent = sessions.filter { $0.completedAt != nil }
             if !recent.isEmpty {
                 let sectionItem = NSMenuItem(title: "📋 Recent (\(recent.count))", action: nil, keyEquivalent: "")
                 sectionItem.isEnabled = false
                 menu.addItem(sectionItem)
 
-                for session in recent.prefix(10) {
+                let maxToShow = sessionManager.maxRecentSessions
+                for session in recent.prefix(maxToShow) {
                     let item = createSessionMenuItem(session)
                     menu.addItem(item)
                 }
 
-                if recent.count > 10 {
-                    let moreItem = NSMenuItem(title: "  ... and \(recent.count - 10) more", action: nil, keyEquivalent: "")
+                if recent.count > maxToShow {
+                    let moreItem = NSMenuItem(title: "  ... and \(recent.count - maxToShow) more", action: nil, keyEquivalent: "")
                     moreItem.isEnabled = false
                     menu.addItem(moreItem)
                 }
@@ -89,13 +90,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Actions
         menu.addItem(NSMenuItem.separator())
 
-        let clearItem = NSMenuItem(title: "Clear Acknowledged", action: #selector(clearAcknowledged), keyEquivalent: "")
-        clearItem.target = self
-        menu.addItem(clearItem)
+        let clearRecentItem = NSMenuItem(title: "Clear Recent", action: #selector(clearRecent), keyEquivalent: "")
+        clearRecentItem.target = self
+        menu.addItem(clearRecentItem)
 
         let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refresh), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // Settings submenu
+        let settingsItem = NSMenuItem(title: "⚙️ Settings", action: nil, keyEquivalent: "")
+        let settingsSubmenu = NSMenu()
+
+        // Alert toggles
+        let alertHeader = NSMenuItem(title: "Alerts", action: nil, keyEquivalent: "")
+        alertHeader.isEnabled = false
+        settingsSubmenu.addItem(alertHeader)
+
+        let notificationItem = NSMenuItem(title: "Notification", action: #selector(toggleNotification), keyEquivalent: "")
+        notificationItem.target = self
+        notificationItem.state = sessionManager.notificationEnabled ? .on : .off
+        settingsSubmenu.addItem(notificationItem)
+
+        let soundItem = NSMenuItem(title: "Sound", action: #selector(toggleSound), keyEquivalent: "")
+        soundItem.target = self
+        soundItem.state = sessionManager.soundEnabled ? .on : .off
+        settingsSubmenu.addItem(soundItem)
+
+        let voiceItem = NSMenuItem(title: "Voice", action: #selector(toggleVoice), keyEquivalent: "")
+        voiceItem.target = self
+        voiceItem.state = sessionManager.voiceEnabled ? .on : .off
+        settingsSubmenu.addItem(voiceItem)
+
+        settingsSubmenu.addItem(NSMenuItem.separator())
+
+        // Max recent sessions submenu
+        let maxRecentItem = NSMenuItem(title: "Max Recent Sessions", action: nil, keyEquivalent: "")
+        let maxRecentSubmenu = NSMenu()
+
+        for count in [5, 10, 20, 50] {
+            let countItem = NSMenuItem(title: "\(count)", action: #selector(setMaxRecent(_:)), keyEquivalent: "")
+            countItem.target = self
+            countItem.representedObject = count
+            if sessionManager.maxRecentSessions == count {
+                countItem.state = .on
+            }
+            maxRecentSubmenu.addItem(countItem)
+        }
+        maxRecentItem.submenu = maxRecentSubmenu
+        settingsSubmenu.addItem(maxRecentItem)
+
+        settingsItem.submenu = settingsSubmenu
+        menu.addItem(settingsItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -132,14 +180,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func createSessionMenuItem(_ session: ClaudeSession) -> NSMenuItem {
-        // Show summary keyword prominently, then project name
-        let summaryBadge = session.summary?.uppercased() ?? ""
-        let title: String
-        if summaryBadge.isEmpty {
-            title = "  \(session.projectName) - \(session.terminalInfo)"
-        } else {
-            title = "  [\(summaryBadge)] \(session.projectName)"
-        }
+        // Show terminal and project name prominently
+        let title = "  \(session.terminalInfo) · \(session.projectName)"
 
         let item = NSMenuItem(title: title, action: #selector(sessionClicked(_:)), keyEquivalent: "")
         item.target = self
@@ -148,59 +190,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Add submenu for actions
         let submenu = NSMenu()
 
-        // Show details if available (verbosity level 1)
-        if let details = session.details, !details.isEmpty {
-            let detailsItem = NSMenuItem(title: "📋 \(details)", action: nil, keyEquivalent: "")
-            detailsItem.isEnabled = false
-            submenu.addItem(detailsItem)
+        // Only show "Go There" for non-background sessions
+        if session.terminalInfo != "Background" {
+            let goItem = NSMenuItem(title: "Go There", action: #selector(goToSession(_:)), keyEquivalent: "")
+            goItem.target = self
+            goItem.representedObject = session.id
+            submenu.addItem(goItem)
             submenu.addItem(NSMenuItem.separator())
         }
 
-        // Show terminal info
-        let infoItem = NSMenuItem(title: "📍 \(session.terminalInfo)", action: nil, keyEquivalent: "")
-        infoItem.isEnabled = false
-        submenu.addItem(infoItem)
+        // Show PID for running sessions
+        if session.status == .running, let pid = session.pid {
+            let pidItem = NSMenuItem(title: "PID: \(pid)", action: nil, keyEquivalent: "")
+            pidItem.isEnabled = false
+            submenu.addItem(pidItem)
 
-        submenu.addItem(NSMenuItem.separator())
-
-        let goItem = NSMenuItem(title: "Go There", action: #selector(goToSession(_:)), keyEquivalent: "")
-        goItem.target = self
-        goItem.representedObject = session.id
-        submenu.addItem(goItem)
-
-        if session.status == .completed {
-            let ackItem = NSMenuItem(title: "Acknowledge", action: #selector(acknowledgeSession(_:)), keyEquivalent: "")
-            ackItem.target = self
-            ackItem.representedObject = session.id
-            submenu.addItem(ackItem)
+            let markCompleteItem = NSMenuItem(title: "Mark as Completed", action: #selector(markSessionComplete(_:)), keyEquivalent: "")
+            markCompleteItem.target = self
+            markCompleteItem.representedObject = session.id
+            submenu.addItem(markCompleteItem)
 
             submenu.addItem(NSMenuItem.separator())
-
-            let snooze5 = NSMenuItem(title: "Snooze 5 min", action: #selector(snooze5(_:)), keyEquivalent: "")
-            snooze5.target = self
-            snooze5.representedObject = session.id
-            submenu.addItem(snooze5)
-
-            let snooze15 = NSMenuItem(title: "Snooze 15 min", action: #selector(snooze15(_:)), keyEquivalent: "")
-            snooze15.target = self
-            snooze15.representedObject = session.id
-            submenu.addItem(snooze15)
-
-            let snooze60 = NSMenuItem(title: "Snooze 1 hour", action: #selector(snooze60(_:)), keyEquivalent: "")
-            snooze60.target = self
-            snooze60.representedObject = session.id
-            submenu.addItem(snooze60)
         }
-
-        // Speak summary option
-        submenu.addItem(NSMenuItem.separator())
-
-        let speakItem = NSMenuItem(title: "🔊 Speak Summary", action: #selector(speakSessionSummary(_:)), keyEquivalent: "")
-        speakItem.target = self
-        speakItem.representedObject = session.id
-        submenu.addItem(speakItem)
-
-        submenu.addItem(NSMenuItem.separator())
 
         let removeItem = NSMenuItem(title: "Remove", action: #selector(removeSession(_:)), keyEquivalent: "")
         removeItem.target = self
@@ -210,12 +221,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         item.submenu = submenu
 
         return item
-    }
-
-    @objc func speakSessionSummary(_ sender: NSMenuItem) {
-        guard let sessionId = sender.representedObject as? String,
-              let session = sessionManager.sessions.first(where: { $0.id == sessionId }) else { return }
-        sessionManager.speakSummary(session)
     }
 
     func updateIconBadge() {
@@ -241,27 +246,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func goToSession(_ sender: NSMenuItem) {
         guard let sessionId = sender.representedObject as? String else { return }
         sessionManager.navigateToSession(id: sessionId)
-        sessionManager.acknowledgeSession(id: sessionId)
-    }
-
-    @objc func acknowledgeSession(_ sender: NSMenuItem) {
-        guard let sessionId = sender.representedObject as? String else { return }
-        sessionManager.acknowledgeSession(id: sessionId)
-    }
-
-    @objc func snooze5(_ sender: NSMenuItem) {
-        guard let sessionId = sender.representedObject as? String else { return }
-        sessionManager.snoozeSession(id: sessionId, duration: 5 * 60)
-    }
-
-    @objc func snooze15(_ sender: NSMenuItem) {
-        guard let sessionId = sender.representedObject as? String else { return }
-        sessionManager.snoozeSession(id: sessionId, duration: 15 * 60)
-    }
-
-    @objc func snooze60(_ sender: NSMenuItem) {
-        guard let sessionId = sender.representedObject as? String else { return }
-        sessionManager.snoozeSession(id: sessionId, duration: 60 * 60)
+        // Only acknowledge completed sessions, not running ones
+        if let session = sessionManager.sessions.first(where: { $0.id == sessionId }),
+           session.status == .completed {
+            sessionManager.acknowledgeSession(id: sessionId)
+        }
     }
 
     @objc func removeSession(_ sender: NSMenuItem) {
@@ -269,8 +258,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sessionManager.removeSession(id: sessionId)
     }
 
-    @objc func clearAcknowledged() {
-        sessionManager.clearAcknowledged()
+    @objc func markSessionComplete(_ sender: NSMenuItem) {
+        guard let sessionId = sender.representedObject as? String else { return }
+        sessionManager.forceCompleteSession(id: sessionId)
+    }
+
+    @objc func clearRecent() {
+        sessionManager.clearRecent()
+    }
+
+    @objc func toggleNotification() {
+        sessionManager.notificationEnabled.toggle()
+        updateMenu()
+    }
+
+    @objc func toggleSound() {
+        sessionManager.soundEnabled.toggle()
+        updateMenu()
+    }
+
+    @objc func toggleVoice() {
+        sessionManager.voiceEnabled.toggle()
+        updateMenu()
+    }
+
+    @objc func setMaxRecent(_ sender: NSMenuItem) {
+        guard let count = sender.representedObject as? Int else { return }
+        sessionManager.maxRecentSessions = count
+        updateMenu()
     }
 
     @objc func refresh() {

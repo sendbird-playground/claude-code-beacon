@@ -187,33 +187,13 @@ class HookManager {
             app_name="Terminal"; tab_info="Terminal"
         fi
 
-        # Play alert sound
-        afplay /System/Library/Sounds/Glass.aiff &
-
-        # Send to Beacon
+        # Send to Beacon (Beacon handles notifications and sounds)
         SESSION_ID="$$-$(date +%s)"
         escaped_details=$(echo "$task_details" | sed 's/"/\\\\"/g')
         curl -s -X POST "http://localhost:${BEACON_PORT}" \\
             -H "Content-Type: application/json" \\
             -d "{\\"id\\":\\"${SESSION_ID}\\",\\"projectName\\":\\"${project_identifier}\\",\\"terminalInfo\\":\\"${tab_info}\\",\\"workingDirectory\\":\\"${cwd}\\",\\"summary\\":\\"${task_summary}\\",\\"details\\":\\"${escaped_details}\\",\\"tag\\":\\"${session_tag}\\"}" \\
             --connect-timeout 1 2>/dev/null &
-
-        # Build alert message based on style
-        build_message() {
-            local prog=$(fix_pronunciation "$app_name")
-            local proj=$(fix_pronunciation "$project_identifier")
-            local summ=$(fix_pronunciation "$task_summary")
-            case "$ALERT_STYLE" in
-                1) echo "$proj" ;;
-                2) echo "$prog, $proj" ;;
-                3) echo "$prog, $proj, $summ" ;;
-                4) echo "$ALERT_TEMPLATE" | sed "s/{program}/$prog/g; s/{project}/$proj/g; s/{summary}/$summ/g; s/{tag}/$session_tag/g" ;;
-                *) echo "$prog, $proj, $summ" ;;
-            esac
-        }
-
-        # Speak alert
-        say "$(build_message)" &
         """
     }
 

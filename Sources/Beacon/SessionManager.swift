@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import UserNotifications
 
 // MARK: - Models
 
@@ -6,8 +8,8 @@ enum SessionStatus: String, Codable {
     case running = "running"
     case completed = "completed"
     case acknowledged = "acknowledged"
-    case snoozed = "snoozed"
 }
+
 
 struct ClaudeSession: Identifiable, Codable {
     let id: String
@@ -18,8 +20,6 @@ struct ClaudeSession: Identifiable, Codable {
     var createdAt: Date
     var completedAt: Date?
     var acknowledgedAt: Date?
-    var snoozeUntil: Date?
-    var reAlarmCount: Int
     var pid: Int32?
     var summary: String?      // 1-3 word summary (e.g., "fix", "add", "update")
     var details: String?      // Full details for verbose mode
@@ -34,8 +34,6 @@ struct ClaudeSession: Identifiable, Codable {
         createdAt: Date = Date(),
         completedAt: Date? = nil,
         acknowledgedAt: Date? = nil,
-        snoozeUntil: Date? = nil,
-        reAlarmCount: Int = 0,
         pid: Int32? = nil,
         summary: String? = nil,
         details: String? = nil,
@@ -49,21 +47,12 @@ struct ClaudeSession: Identifiable, Codable {
         self.createdAt = createdAt
         self.completedAt = completedAt
         self.acknowledgedAt = acknowledgedAt
-        self.snoozeUntil = snoozeUntil
-        self.reAlarmCount = reAlarmCount
         self.pid = pid
         self.summary = summary
         self.details = details
         self.tag = tag
     }
 
-    var needsReAlarm: Bool {
-        guard status == .completed else { return false }
-        if let snoozeUntil = snoozeUntil, Date() < snoozeUntil {
-            return false
-        }
-        return true
-    }
 
     // Display summary with fallback
     var displaySummary: String {
@@ -80,35 +69,111 @@ class SessionManager {
     var onSessionsChanged: (() -> Void)?
 
     private var monitorTimer: Timer?
-    private var reAlarmTimer: Timer?
-    private let reAlarmInterval: TimeInterval = 60
+    private var appActivationObserver: Any?
     private let storageURL: URL
 
     private var knownPids: Set<Int32> = []
+    private var ignoredPids: Set<Int32> = []  // PIDs to ignore (user marked as complete)
+    private let settingsURL: URL
+
+    // Settings
+    var notificationEnabled: Bool = true {
+        didSet { saveSettings() }
+    }
+
+    var soundEnabled: Bool = true {
+        didSet { saveSettings() }
+    }
+
+    var voiceEnabled: Bool = true {
+        didSet { saveSettings() }
+    }
+
+    var maxRecentSessions: Int = 10 {
+        didSet {
+            saveSettings()
+            trimOldSessions()
+        }
+    }
 
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let beaconDir = appSupport.appendingPathComponent("Beacon")
         try? FileManager.default.createDirectory(at: beaconDir, withIntermediateDirectories: true)
         storageURL = beaconDir.appendingPathComponent("sessions.json")
+        settingsURL = beaconDir.appendingPathComponent("settings.json")
 
         loadSessions()
+        loadSettings()
+        requestNotificationPermission()
+    }
+
+    private func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if let error = error {
+                print("Notification permission error: \(error)")
+            }
+        }
     }
 
     // MARK: - Monitoring
 
     func startMonitoring() {
-        // Initial scan
-        scanForSessions()
-
-        // Monitor every 5 seconds for new/completed sessions
-        monitorTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        // Defer initial scan to background to avoid blocking startup
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.scanForSessions()
         }
 
-        // Re-alarm timer
-        reAlarmTimer = Timer.scheduledTimer(withTimeInterval: reAlarmInterval, repeats: true) { [weak self] _ in
-            self?.checkForReAlarms()
+        // Monitor every 5 seconds for new/completed sessions
+        monitorTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            DispatchQueue.global(qos: .userInitiated).async {
+                self?.scanForSessions()
+            }
+        }
+
+        // Watch for app activations to auto-acknowledge sessions
+        appActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleAppActivation(notification)
+        }
+    }
+
+    private func handleAppActivation(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              let appName = app.localizedName else { return }
+
+        // Map app names to our display names for matching
+        let reverseMapping: [String: String] = [
+            "WezTerm": "WezTerm",
+            "wezterm": "WezTerm",
+            "iTerm2": "iTerm2",
+            "iTerm": "iTerm2",
+            "Cursor": "Cursor",
+            "Visual Studio Code": "VS Code",
+            "Code": "VS Code",
+            "PyCharm": "PyCharm",
+            "IntelliJ IDEA": "IntelliJ",
+            "WebStorm": "WebStorm",
+            "GoLand": "GoLand",
+            "Rider": "Rider",
+            "Terminal": "Terminal",
+            "Alacritty": "Alacritty",
+            "kitty": "Kitty",
+            "Hyper": "Hyper"
+        ]
+
+        let normalizedAppName = reverseMapping[appName] ?? appName
+
+        // Check if activated app matches any completed session's terminal
+        for session in sessions where session.status == .completed {
+            if session.terminalInfo == normalizedAppName ||
+               session.terminalInfo.localizedCaseInsensitiveContains(appName) ||
+               appName.localizedCaseInsensitiveContains(session.terminalInfo) {
+                acknowledgeSession(id: session.id)
+            }
         }
     }
 
@@ -117,6 +182,11 @@ class SessionManager {
 
         // Check for new processes
         for process in claudeProcesses {
+            // Skip ignored PIDs (user marked as complete)
+            if ignoredPids.contains(process.pid) {
+                continue
+            }
+
             if !knownPids.contains(process.pid) {
                 knownPids.insert(process.pid)
 
@@ -147,6 +217,7 @@ class SessionManager {
                     sessions[i].completedAt = Date()
                     sendCompletionNotification(for: sessions[i])
                     saveSessions()
+                    trimOldSessions()
                     onSessionsChanged?()
                 }
             }
@@ -154,6 +225,7 @@ class SessionManager {
 
         // Clean up old PIDs
         knownPids = knownPids.intersection(runningPids)
+        ignoredPids = ignoredPids.intersection(runningPids)
     }
 
     struct ClaudeProcess {
@@ -182,8 +254,9 @@ class SessionManager {
 
             for line in output.components(separatedBy: "\n") {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
-                // Look for claude processes
-                if trimmed.contains("claude") || trimmed.contains("Claude") {
+                // Look for claude CLI processes (exclude Claude.app desktop app)
+                if (trimmed.contains("claude") || trimmed.contains("Claude")) &&
+                   !trimmed.contains("Claude.app") {
                     let parts = trimmed.split(separator: " ", maxSplits: 1)
                     if let pidStr = parts.first, let pid = Int32(pidStr) {
                         // Get working directory for this PID
@@ -230,36 +303,30 @@ class SessionManager {
     }
 
     func getProcessTerminal(pid: Int32) -> String {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/ps")
-        task.arguments = ["-p", "\(pid)", "-o", "tty="]
+        // Check if parent is launchd (PID 1) - orphaned process
+        if let ppid = getParentPid(pid), ppid == 1 {
+            return "Background"
+        }
 
-        let pipe = Pipe()
-        task.standardOutput = pipe
+        // Walk up the process tree to find the parent application
+        var currentPid = pid
 
-        do {
-            try task.run()
-            task.waitUntilExit()
+        for _ in 0..<10 {  // Max 10 levels up
+            guard let ppid = getParentPid(currentPid), ppid > 1 else { break }
 
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let tty = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-            if !tty.isEmpty && tty != "??" {
-                // Try to determine terminal app from TTY
-                return detectTerminalApp(tty: tty, pid: pid)
+            if let appName = getAppNameFromPid(ppid) {
+                return appName
             }
-        } catch {
-            // Ignore
+            currentPid = ppid
         }
 
         return "Terminal"
     }
 
-    func detectTerminalApp(tty: String, pid: Int32) -> String {
-        // Check environment variables of the process
+    func getParentPid(_ pid: Int32) -> Int32? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
-        task.arguments = ["-p", "\(pid)", "-o", "command="]
+        task.arguments = ["-p", "\(pid)", "-o", "ppid="]
 
         let pipe = Pipe()
         task.standardOutput = pipe
@@ -269,27 +336,70 @@ class SessionManager {
             task.waitUntilExit()
 
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let cmd = String(data: data, encoding: .utf8)?.lowercased() ?? ""
+            let ppidStr = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return Int32(ppidStr)
+        } catch {
+            return nil
+        }
+    }
 
-            if cmd.contains("wezterm") {
+    func getAppNameFromPid(_ pid: Int32) -> String? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/ps")
+        task.arguments = ["-p", "\(pid)", "-o", "comm="]
+
+        let pipe = Pipe()
+        task.standardOutput = pipe
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let comm = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            // Check if it's an app (contains .app in path or known app names)
+            let lowered = comm.lowercased()
+
+            if lowered.contains("wezterm") {
                 return "WezTerm"
-            } else if cmd.contains("iterm") {
+            } else if lowered.contains("iterm") {
                 return "iTerm2"
-            } else if cmd.contains("cursor") || cmd.contains("vscode") {
+            } else if lowered.contains("cursor") {
                 return "Cursor"
-            } else if cmd.contains("pycharm") || cmd.contains("jetbrains") {
+            } else if lowered.contains("code") && !lowered.contains("claude") {
+                return "VS Code"
+            } else if lowered.contains("pycharm") {
                 return "PyCharm"
+            } else if lowered.contains("intellij") {
+                return "IntelliJ"
+            } else if lowered.contains("webstorm") {
+                return "WebStorm"
+            } else if lowered.contains("goland") {
+                return "GoLand"
+            } else if lowered.contains("rider") {
+                return "Rider"
+            } else if lowered.contains("terminal") && comm.contains(".app") {
+                return "Terminal"
+            } else if lowered.contains("alacritty") {
+                return "Alacritty"
+            } else if lowered.contains("kitty") {
+                return "Kitty"
+            } else if lowered.contains("hyper") {
+                return "Hyper"
+            } else if comm.contains(".app/") {
+                // Extract app name from path like /Applications/Foo.app/Contents/MacOS/foo
+                if let range = comm.range(of: "/([^/]+)\\.app/", options: .regularExpression) {
+                    let appPath = String(comm[range])
+                    let appName = appPath.replacingOccurrences(of: "/", with: "").replacingOccurrences(of: ".app", with: "")
+                    return appName
+                }
             }
         } catch {
             // Ignore
         }
 
-        // Fallback: use TTY suffix
-        if let suffix = tty.components(separatedBy: "/").last {
-            return "Terminal \(suffix)"
-        }
-
-        return "Terminal"
+        return nil
     }
 
     // MARK: - Session Management
@@ -304,34 +414,46 @@ class SessionManager {
         }
     }
 
-    func snoozeSession(id: String, duration: TimeInterval) {
-        if let index = sessions.firstIndex(where: { $0.id == id }) {
-            sessions[index].status = .snoozed
-            sessions[index].snoozeUntil = Date().addingTimeInterval(duration)
-            saveSessions()
-            onSessionsChanged?()
-            cancelNotifications(for: id)
-        }
-    }
 
     func navigateToSession(id: String) {
         guard let session = sessions.first(where: { $0.id == id }) else { return }
 
-        // Activate the appropriate terminal app
-        var script = ""
+        let appName = session.terminalInfo
+        let workspace = NSWorkspace.shared
 
-        if session.terminalInfo.contains("WezTerm") {
-            script = "tell application \"WezTerm\" to activate"
-        } else if session.terminalInfo.contains("iTerm") {
-            script = "tell application \"iTerm\" to activate"
-        } else if session.terminalInfo.contains("Cursor") {
-            script = "tell application \"Cursor\" to activate"
-        } else if session.terminalInfo.contains("PyCharm") {
-            script = "tell application \"PyCharm\" to activate"
-        } else {
-            script = "tell application \"Terminal\" to activate"
+        // Map common display names to actual app names for activation
+        let appNameMappings: [String: [String]] = [
+            "WezTerm": ["WezTerm", "wezterm"],
+            "iTerm2": ["iTerm2", "iTerm", "iterm"],
+            "Cursor": ["Cursor"],
+            "VS Code": ["Visual Studio Code", "Code", "VSCode"],
+            "PyCharm": ["PyCharm"],
+            "IntelliJ": ["IntelliJ IDEA"],
+            "WebStorm": ["WebStorm"],
+            "GoLand": ["GoLand"],
+            "Rider": ["Rider"],
+            "Terminal": ["Terminal"],
+            "Alacritty": ["Alacritty"],
+            "Kitty": ["kitty"],
+            "Hyper": ["Hyper"]
+        ]
+
+        // Get possible app names to search for
+        let searchNames = appNameMappings[appName] ?? [appName]
+
+        // Try to find and activate the running app
+        for searchName in searchNames {
+            if let app = workspace.runningApplications.first(where: {
+                $0.localizedName == searchName ||
+                $0.localizedName?.localizedCaseInsensitiveContains(searchName) == true
+            }) {
+                app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+                return
+            }
         }
 
+        // Fallback to AppleScript with first search name
+        let script = "tell application \"\(searchNames.first ?? appName)\" to activate"
         var error: NSDictionary?
         if let appleScript = NSAppleScript(source: script) {
             appleScript.executeAndReturnError(&error)
@@ -345,8 +467,38 @@ class SessionManager {
         cancelNotifications(for: id)
     }
 
+    func forceCompleteSession(id: String) {
+        if let index = sessions.firstIndex(where: { $0.id == id }) {
+            // Add PID to ignored list so it won't be re-detected
+            if let pid = sessions[index].pid {
+                ignoredPids.insert(pid)
+            }
+            sessions[index].status = .completed
+            sessions[index].completedAt = Date()
+            saveSessions()
+            onSessionsChanged?()
+        }
+    }
+
     func clearAcknowledged() {
         sessions.removeAll { $0.status == .acknowledged }
+        saveSessions()
+        onSessionsChanged?()
+    }
+
+    func clearRecent() {
+        // Clear all non-running sessions and their notifications
+        let nonRunning = sessions.filter { $0.status != .running }
+        for session in nonRunning {
+            cancelNotifications(for: session.id)
+        }
+        sessions.removeAll { $0.status != .running }
+        saveSessions()
+        onSessionsChanged?()
+    }
+
+    func clearAll() {
+        sessions.removeAll { $0.status != .running }
         saveSessions()
         onSessionsChanged?()
     }
@@ -354,75 +506,52 @@ class SessionManager {
     // MARK: - Notifications
 
     func sendCompletionNotification(for session: ClaudeSession) {
-        // Note: Sound and voice are handled by the hook script if installed
-        // Only play sound if hooks are NOT installed (fallback)
-        if !HookManager.shared.isHookInstalled {
+        // Send macOS notification if enabled
+        if notificationEnabled {
+            let content = UNMutableNotificationContent()
+            content.title = "Claude Task Completed"
+            content.body = "\(session.terminalInfo) · \(session.projectName)"
+            content.sound = nil  // We handle sound separately
+            content.userInfo = ["sessionId": session.id]
+
+            let request = UNNotificationRequest(
+                identifier: session.id,
+                content: content,
+                trigger: nil
+            )
+            UNUserNotificationCenter.current().add(request)
+        }
+
+        // Play sound if enabled
+        if soundEnabled {
             playAlertSound()
+        }
+
+        // Speak if enabled
+        if voiceEnabled {
             speakSummary(session)
         }
-
-        print("Task completed: \(session.displaySummary) - \(session.projectName) - \(session.terminalInfo)")
     }
 
-    func sendReAlarmNotification(for session: ClaudeSession) {
-        // Re-alarms always play sound (not handled by hook)
-        playAlertSound()
-        speakSummary(session, isReminder: true)
-
-        print("Reminder: \(session.displaySummary) - \(session.projectName) - \(session.terminalInfo)")
-
-        // Increment re-alarm count
-        if let index = sessions.firstIndex(where: { $0.id == session.id }) {
-            sessions[index].reAlarmCount += 1
-            saveSessions()
-        }
-    }
-
-    func speakSummary(_ session: ClaudeSession, isReminder: Bool = false) {
-        let summary = session.displaySummary
-        let project = session.projectName
-
-        var text = "\(summary), \(project)"
-        if isReminder {
-            text = "reminder, \(text)"
-        }
-
+    func speakSummary(_ session: ClaudeSession) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-        task.arguments = [text]
+        task.arguments = [session.projectName]
         try? task.run()
     }
 
     func cancelNotifications(for sessionId: String) {
-        // No-op without UNUserNotificationCenter
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [sessionId])
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [sessionId])
     }
 
     func playAlertSound() {
-        // Play system alert sound
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
         task.arguments = ["/System/Library/Sounds/Glass.aiff"]
         try? task.run()
     }
 
-    func checkForReAlarms() {
-        for session in sessions {
-            // Check if snoozed sessions should wake up
-            if session.status == .snoozed, let snoozeUntil = session.snoozeUntil, Date() >= snoozeUntil {
-                if let index = sessions.firstIndex(where: { $0.id == session.id }) {
-                    sessions[index].status = .completed
-                    sessions[index].snoozeUntil = nil
-                    saveSessions()
-                    onSessionsChanged?()
-                }
-            }
-
-            // Send re-alarms for completed tasks
-            if session.needsReAlarm && session.status == .completed {
-                sendReAlarmNotification(for: session)
-            }
-        }
-    }
 
     // MARK: - Persistence
 
@@ -455,4 +584,60 @@ class SessionManager {
             print("Failed to load sessions: \(error)")
         }
     }
+
+    // MARK: - Settings
+
+    struct BeaconSettings: Codable {
+        var notificationEnabled: Bool = true
+        var soundEnabled: Bool = true
+        var voiceEnabled: Bool = true
+        var maxRecentSessions: Int = 10
+    }
+
+    func saveSettings() {
+        do {
+            let settings = BeaconSettings(
+                notificationEnabled: notificationEnabled,
+                soundEnabled: soundEnabled,
+                voiceEnabled: voiceEnabled,
+                maxRecentSessions: maxRecentSessions
+            )
+            let data = try JSONEncoder().encode(settings)
+            try data.write(to: settingsURL, options: .atomic)
+        } catch {
+            print("Failed to save settings: \(error)")
+        }
+    }
+
+    func loadSettings() {
+        guard FileManager.default.fileExists(atPath: settingsURL.path) else { return }
+
+        do {
+            let data = try Data(contentsOf: settingsURL)
+            let settings = try JSONDecoder().decode(BeaconSettings.self, from: data)
+            notificationEnabled = settings.notificationEnabled
+            soundEnabled = settings.soundEnabled
+            voiceEnabled = settings.voiceEnabled
+            maxRecentSessions = settings.maxRecentSessions
+        } catch {
+            print("Failed to load settings: \(error)")
+        }
+    }
+
+    func trimOldSessions() {
+        let completed = sessions.filter { $0.status != .running }
+        if completed.count > maxRecentSessions {
+            // Keep only the most recent completed sessions
+            let toRemove = completed.dropFirst(maxRecentSessions)
+            for session in toRemove {
+                cancelNotifications(for: session.id)
+            }
+            sessions.removeAll { session in
+                session.status != .running && toRemove.contains(where: { $0.id == session.id })
+            }
+            saveSessions()
+            onSessionsChanged?()
+        }
+    }
 }
+
