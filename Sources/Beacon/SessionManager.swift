@@ -124,8 +124,8 @@ class SessionManager {
             self?.scanForSessions()
         }
 
-        // Monitor every 5 seconds for new/completed sessions
-        monitorTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        // Monitor every 2 seconds for new/completed sessions
+        monitorTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             DispatchQueue.global(qos: .userInitiated).async {
                 self?.scanForSessions()
             }
@@ -190,10 +190,17 @@ class SessionManager {
             if !knownPids.contains(process.pid) {
                 knownPids.insert(process.pid)
 
-                // Check if we already have a session for this working directory
-                if !sessions.contains(where: { $0.workingDirectory == process.cwd && $0.status == .running }) {
+                // Check if we already have a session for this PID
+                if !sessions.contains(where: { $0.pid == process.pid && $0.status == .running }) {
+                    let pathURL = URL(fileURLWithPath: process.cwd)
+                    let folderName = pathURL.lastPathComponent
+                    let parentName = pathURL.deletingLastPathComponent().lastPathComponent
+
+                    // Show "parent/folder" for better context (e.g., "vitess-ops/eagleeye")
+                    let projectName = parentName.isEmpty || parentName == "/" ? folderName : "\(parentName)/\(folderName)"
+
                     let session = ClaudeSession(
-                        projectName: URL(fileURLWithPath: process.cwd).lastPathComponent,
+                        projectName: projectName,
                         terminalInfo: process.terminal,
                         workingDirectory: process.cwd,
                         status: .running,
@@ -419,41 +426,158 @@ class SessionManager {
         guard let session = sessions.first(where: { $0.id == id }) else { return }
 
         let appName = session.terminalInfo
-        let workspace = NSWorkspace.shared
 
-        // Map common display names to actual app names for activation
-        let appNameMappings: [String: [String]] = [
-            "WezTerm": ["WezTerm", "wezterm"],
-            "iTerm2": ["iTerm2", "iTerm", "iterm"],
-            "Cursor": ["Cursor"],
-            "VS Code": ["Visual Studio Code", "Code", "VSCode"],
-            "PyCharm": ["PyCharm"],
-            "IntelliJ": ["IntelliJ IDEA"],
-            "WebStorm": ["WebStorm"],
-            "GoLand": ["GoLand"],
-            "Rider": ["Rider"],
-            "Terminal": ["Terminal"],
-            "Alacritty": ["Alacritty"],
-            "Kitty": ["kitty"],
-            "Hyper": ["Hyper"]
-        ]
-
-        // Get possible app names to search for
-        let searchNames = appNameMappings[appName] ?? [appName]
-
-        // Try to find and activate the running app
-        for searchName in searchNames {
-            if let app = workspace.runningApplications.first(where: {
-                $0.localizedName == searchName ||
-                $0.localizedName?.localizedCaseInsensitiveContains(searchName) == true
-            }) {
-                app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-                return
-            }
+        // Special handling for WezTerm - activate specific pane
+        if appName == "WezTerm" {
+            activateWezTermPane(workingDirectory: session.workingDirectory)
+            return
         }
 
-        // Fallback to AppleScript with first search name
-        let script = "tell application \"\(searchNames.first ?? appName)\" to activate"
+        // Special handling for Terminal.app - activate specific tab by TTY
+        if appName.hasPrefix("Terminal"), let pid = session.pid {
+            activateTerminalTab(pid: pid, workingDirectory: session.workingDirectory)
+            return
+        }
+
+        // Use AppleScript for reliable activation across macOS versions
+        let script = """
+            tell application "\(appName)"
+                activate
+                reopen
+            end tell
+            """
+
+        var error: NSDictionary?
+        if let appleScript = NSAppleScript(source: script) {
+            appleScript.executeAndReturnError(&error)
+        }
+    }
+
+    func activateTerminalTab(pid: Int32, workingDirectory: String) {
+        // Get TTY for the process
+        let ttyTask = Process()
+        ttyTask.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ttyTask.arguments = ["-p", "\(pid)", "-o", "tty="]
+
+        let pipe = Pipe()
+        ttyTask.standardOutput = pipe
+
+        var tty = ""
+        do {
+            try ttyTask.run()
+            ttyTask.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            tty = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        } catch {
+            // Continue with empty tty
+        }
+
+        // Try TTY matching first, then fall back to path matching
+        let script = """
+            tell application "Terminal"
+                -- Try TTY matching first
+                if "\(tty)" is not "" and "\(tty)" is not "??" then
+                    set targetTTY to "/dev/\(tty)"
+                    repeat with w in windows
+                        repeat with t in tabs of w
+                            try
+                                if tty of t is targetTTY then
+                                    set selected of t to true
+                                    set frontmost of w to true
+                                    activate
+                                    return "found by tty"
+                                end if
+                            end try
+                        end repeat
+                    end repeat
+                end if
+
+                -- Fallback: match by working directory in tab name
+                set targetPath to "\(workingDirectory)"
+                set targetName to do shell script "basename " & quoted form of targetPath
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        try
+                            if name of t contains targetName then
+                                set selected of t to true
+                                set frontmost of w to true
+                                activate
+                                return "found by name"
+                            end if
+                        end try
+                    end repeat
+                end repeat
+
+                -- Just activate if nothing found
+                activate
+                return "not found"
+            end tell
+            """
+
+        var error: NSDictionary?
+        if let appleScript = NSAppleScript(source: script) {
+            appleScript.executeAndReturnError(&error)
+        }
+    }
+
+    func activateWezTermPane(workingDirectory: String) {
+        // First, get list of panes from WezTerm
+        let listTask = Process()
+        listTask.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        listTask.arguments = ["wezterm", "cli", "list", "--format", "json"]
+
+        let pipe = Pipe()
+        listTask.standardOutput = pipe
+        listTask.standardError = FileHandle.nullDevice
+
+        do {
+            try listTask.run()
+            listTask.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+
+            // Parse JSON to find pane with matching CWD
+            if let panes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                for pane in panes {
+                    if let cwd = pane["cwd"] as? String {
+                        // CWD comes as file:///path format
+                        let cleanCwd = cwd.replacingOccurrences(of: "file://", with: "")
+                        if cleanCwd == workingDirectory {
+                            if let paneId = pane["pane_id"] as? Int {
+                                // Activate the pane
+                                let activateTask = Process()
+                                activateTask.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                                activateTask.arguments = ["wezterm", "cli", "activate-pane", "--pane-id", "\(paneId)"]
+                                try? activateTask.run()
+                                activateTask.waitUntilExit()
+
+                                // Also bring WezTerm to front
+                                let script = """
+                                    tell application "WezTerm"
+                                        activate
+                                    end tell
+                                    """
+                                var error: NSDictionary?
+                                if let appleScript = NSAppleScript(source: script) {
+                                    appleScript.executeAndReturnError(&error)
+                                }
+                                return
+                            }
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Fallback to just activating WezTerm
+        }
+
+        // Fallback: just activate WezTerm
+        let script = """
+            tell application "WezTerm"
+                activate
+            end tell
+            """
         var error: NSDictionary?
         if let appleScript = NSAppleScript(source: script) {
             appleScript.executeAndReturnError(&error)
@@ -475,6 +599,19 @@ class SessionManager {
             }
             sessions[index].status = .completed
             sessions[index].completedAt = Date()
+            saveSessions()
+            onSessionsChanged?()
+        }
+    }
+
+    func killSession(id: String) {
+        if let index = sessions.firstIndex(where: { $0.id == id }),
+           let pid = sessions[index].pid {
+            // Kill the process
+            kill(pid, SIGTERM)
+
+            // Remove from sessions
+            sessions.remove(at: index)
             saveSessions()
             onSessionsChanged?()
         }

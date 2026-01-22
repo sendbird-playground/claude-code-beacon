@@ -183,40 +183,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Show terminal and project name prominently
         let title = "  \(session.terminalInfo) · \(session.projectName)"
 
-        let item = NSMenuItem(title: title, action: #selector(sessionClicked(_:)), keyEquivalent: "")
-        item.target = self
+        // No action on main item - clicking opens submenu, menu stays open
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.representedObject = session.id
 
         // Add submenu for actions
         let submenu = NSMenu()
 
-        // Only show "Go There" for non-background sessions
+        // Only show "Show" for non-background sessions
         if session.terminalInfo != "Background" {
-            let goItem = NSMenuItem(title: "Go There", action: #selector(goToSession(_:)), keyEquivalent: "")
-            goItem.target = self
-            goItem.representedObject = session.id
-            submenu.addItem(goItem)
-            submenu.addItem(NSMenuItem.separator())
+            let showItem = NSMenuItem(title: "Show", action: #selector(showSession(_:)), keyEquivalent: "")
+            showItem.target = self
+            showItem.representedObject = session.id
+            submenu.addItem(showItem)
         }
 
-        // Show PID for running sessions
-        if session.status == .running, let pid = session.pid {
-            let pidItem = NSMenuItem(title: "PID: \(pid)", action: nil, keyEquivalent: "")
-            pidItem.isEnabled = false
-            submenu.addItem(pidItem)
-
-            let markCompleteItem = NSMenuItem(title: "Mark as Completed", action: #selector(markSessionComplete(_:)), keyEquivalent: "")
-            markCompleteItem.target = self
-            markCompleteItem.representedObject = session.id
-            submenu.addItem(markCompleteItem)
-
-            submenu.addItem(NSMenuItem.separator())
+        // Show kill option for running sessions
+        if session.status == .running {
+            let killItem = NSMenuItem(title: "Kill Process", action: #selector(killSession(_:)), keyEquivalent: "")
+            killItem.target = self
+            killItem.representedObject = session.id
+            submenu.addItem(killItem)
         }
 
-        let removeItem = NSMenuItem(title: "Remove", action: #selector(removeSession(_:)), keyEquivalent: "")
-        removeItem.target = self
-        removeItem.representedObject = session.id
-        submenu.addItem(removeItem)
+        submenu.addItem(NSMenuItem.separator())
+
+        let unlistItem = NSMenuItem(title: "Unlist", action: #selector(removeSession(_:)), keyEquivalent: "")
+        unlistItem.target = self
+        unlistItem.representedObject = session.id
+        submenu.addItem(unlistItem)
 
         item.submenu = submenu
 
@@ -238,12 +233,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
-    @objc func sessionClicked(_ sender: NSMenuItem) {
-        guard let sessionId = sender.representedObject as? String else { return }
-        sessionManager.navigateToSession(id: sessionId)
-    }
-
-    @objc func goToSession(_ sender: NSMenuItem) {
+    @objc func showSession(_ sender: NSMenuItem) {
         guard let sessionId = sender.representedObject as? String else { return }
         sessionManager.navigateToSession(id: sessionId)
         // Only acknowledge completed sessions, not running ones
@@ -258,9 +248,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sessionManager.removeSession(id: sessionId)
     }
 
-    @objc func markSessionComplete(_ sender: NSMenuItem) {
+    @objc func killSession(_ sender: NSMenuItem) {
         guard let sessionId = sender.representedObject as? String else { return }
-        sessionManager.forceCompleteSession(id: sessionId)
+        sessionManager.killSession(id: sessionId)
     }
 
     @objc func clearRecent() {
