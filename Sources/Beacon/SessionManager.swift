@@ -23,6 +23,7 @@ struct ClaudeSession: Identifiable, Codable {
     var pid: Int32?
     var summary: String?      // 1-3 word summary (e.g., "fix", "add", "update")
     var details: String?      // Full details for verbose mode
+    var tag: String?          // Custom category tag (e.g., "backend", "frontend")
 
     init(
         id: String = UUID().uuidString,
@@ -37,7 +38,8 @@ struct ClaudeSession: Identifiable, Codable {
         reAlarmCount: Int = 0,
         pid: Int32? = nil,
         summary: String? = nil,
-        details: String? = nil
+        details: String? = nil,
+        tag: String? = nil
     ) {
         self.id = id
         self.projectName = projectName
@@ -52,6 +54,7 @@ struct ClaudeSession: Identifiable, Codable {
         self.pid = pid
         self.summary = summary
         self.details = details
+        self.tag = tag
     }
 
     var needsReAlarm: Bool {
