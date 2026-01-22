@@ -354,20 +354,19 @@ class SessionManager {
     // MARK: - Notifications
 
     func sendCompletionNotification(for session: ClaudeSession) {
-        // Play sound
-        playAlertSound()
-
-        // Speak summary
-        speakSummary(session)
+        // Note: Sound and voice are handled by the hook script if installed
+        // Only play sound if hooks are NOT installed (fallback)
+        if !HookManager.shared.isHookInstalled {
+            playAlertSound()
+            speakSummary(session)
+        }
 
         print("Task completed: \(session.displaySummary) - \(session.projectName) - \(session.terminalInfo)")
     }
 
     func sendReAlarmNotification(for session: ClaudeSession) {
-        // Play sound
+        // Re-alarms always play sound (not handled by hook)
         playAlertSound()
-
-        // Speak reminder with summary
         speakSummary(session, isReminder: true)
 
         print("Reminder: \(session.displaySummary) - \(session.projectName) - \(session.terminalInfo)")

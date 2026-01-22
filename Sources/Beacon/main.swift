@@ -51,35 +51,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             emptyItem.isEnabled = false
             menu.addItem(emptyItem)
         } else {
-            // Needs Attention
-            let needsAttention = sessions.filter { $0.status == .completed }
-            if !needsAttention.isEmpty {
-                let sectionItem = NSMenuItem(title: "⚠️ Needs Attention (\(needsAttention.count))", action: nil, keyEquivalent: "")
-                sectionItem.isEnabled = false
-                menu.addItem(sectionItem)
-
-                for session in needsAttention {
-                    let item = createSessionMenuItem(session)
-                    menu.addItem(item)
-                }
-                menu.addItem(NSMenuItem.separator())
-            }
-
-            // Snoozed
-            let snoozed = sessions.filter { $0.status == .snoozed }
-            if !snoozed.isEmpty {
-                let sectionItem = NSMenuItem(title: "💤 Snoozed (\(snoozed.count))", action: nil, keyEquivalent: "")
-                sectionItem.isEnabled = false
-                menu.addItem(sectionItem)
-
-                for session in snoozed {
-                    let item = createSessionMenuItem(session)
-                    menu.addItem(item)
-                }
-                menu.addItem(NSMenuItem.separator())
-            }
-
-            // Running
+            // Running sessions
             let running = sessions.filter { $0.status == .running }
             if !running.isEmpty {
                 let sectionItem = NSMenuItem(title: "🔄 Running (\(running.count))", action: nil, keyEquivalent: "")
@@ -93,20 +65,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 menu.addItem(NSMenuItem.separator())
             }
 
-            // Acknowledged
-            let acknowledged = sessions.filter { $0.status == .acknowledged }
-            if !acknowledged.isEmpty {
-                let sectionItem = NSMenuItem(title: "✅ Acknowledged (\(acknowledged.count))", action: nil, keyEquivalent: "")
+            // Recent sessions (completed, snoozed, acknowledged - most recent first)
+            let recent = sessions.filter { $0.status != .running }
+            if !recent.isEmpty {
+                let sectionItem = NSMenuItem(title: "📋 Recent (\(recent.count))", action: nil, keyEquivalent: "")
                 sectionItem.isEnabled = false
                 menu.addItem(sectionItem)
 
-                for session in acknowledged.prefix(5) {
+                for session in recent.prefix(10) {
                     let item = createSessionMenuItem(session)
                     menu.addItem(item)
                 }
 
-                if acknowledged.count > 5 {
-                    let moreItem = NSMenuItem(title: "  ... and \(acknowledged.count - 5) more", action: nil, keyEquivalent: "")
+                if recent.count > 10 {
+                    let moreItem = NSMenuItem(title: "  ... and \(recent.count - 10) more", action: nil, keyEquivalent: "")
                     moreItem.isEnabled = false
                     menu.addItem(moreItem)
                 }
