@@ -1,12 +1,17 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 echo "Building Beacon..."
 swift build -c release
 
 echo "Creating app bundle..."
+rm -rf Beacon.app
 mkdir -p Beacon.app/Contents/MacOS
 cp .build/release/Beacon Beacon.app/Contents/MacOS/
+cp Resources/Info.plist Beacon.app/Contents/
 
 echo "Installing to /Applications..."
 rm -rf /Applications/Beacon.app
