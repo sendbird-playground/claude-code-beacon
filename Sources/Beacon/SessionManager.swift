@@ -21,6 +21,8 @@ struct ClaudeSession: Identifiable, Codable {
     var snoozeUntil: Date?
     var reAlarmCount: Int
     var pid: Int32?
+    var summary: String?      // 1-3 word summary (e.g., "fix", "add", "update")
+    var details: String?      // Full details for verbose mode
 
     init(
         id: String = UUID().uuidString,
@@ -33,7 +35,9 @@ struct ClaudeSession: Identifiable, Codable {
         acknowledgedAt: Date? = nil,
         snoozeUntil: Date? = nil,
         reAlarmCount: Int = 0,
-        pid: Int32? = nil
+        pid: Int32? = nil,
+        summary: String? = nil,
+        details: String? = nil
     ) {
         self.id = id
         self.projectName = projectName
@@ -46,6 +50,8 @@ struct ClaudeSession: Identifiable, Codable {
         self.snoozeUntil = snoozeUntil
         self.reAlarmCount = reAlarmCount
         self.pid = pid
+        self.summary = summary
+        self.details = details
     }
 
     var needsReAlarm: Bool {
@@ -54,6 +60,11 @@ struct ClaudeSession: Identifiable, Codable {
             return false
         }
         return true
+    }
+
+    // Display summary with fallback
+    var displaySummary: String {
+        summary ?? "done"
     }
 }
 
@@ -342,19 +353,42 @@ class SessionManager {
     func sendCompletionNotification(for session: ClaudeSession) {
         // Play sound
         playAlertSound()
-        print("Task completed: \(session.projectName) - \(session.terminalInfo)")
+
+        // Speak summary
+        speakSummary(session)
+
+        print("Task completed: \(session.displaySummary) - \(session.projectName) - \(session.terminalInfo)")
     }
 
     func sendReAlarmNotification(for session: ClaudeSession) {
         // Play sound
         playAlertSound()
-        print("Reminder: \(session.projectName) - \(session.terminalInfo)")
+
+        // Speak reminder with summary
+        speakSummary(session, isReminder: true)
+
+        print("Reminder: \(session.displaySummary) - \(session.projectName) - \(session.terminalInfo)")
 
         // Increment re-alarm count
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             sessions[index].reAlarmCount += 1
             saveSessions()
         }
+    }
+
+    func speakSummary(_ session: ClaudeSession, isReminder: Bool = false) {
+        let summary = session.displaySummary
+        let project = session.projectName
+
+        var text = "\(summary), \(project)"
+        if isReminder {
+            text = "reminder, \(text)"
+        }
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+        task.arguments = [text]
+        try? task.run()
     }
 
     func cancelNotifications(for sessionId: String) {

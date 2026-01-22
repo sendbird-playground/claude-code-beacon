@@ -138,13 +138,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func createSessionMenuItem(_ session: ClaudeSession) -> NSMenuItem {
-        let title = "  \(session.projectName) - \(session.terminalInfo)"
+        // Show summary keyword prominently, then project name
+        let summaryBadge = session.summary?.uppercased() ?? ""
+        let title: String
+        if summaryBadge.isEmpty {
+            title = "  \(session.projectName) - \(session.terminalInfo)"
+        } else {
+            title = "  [\(summaryBadge)] \(session.projectName)"
+        }
+
         let item = NSMenuItem(title: title, action: #selector(sessionClicked(_:)), keyEquivalent: "")
         item.target = self
         item.representedObject = session.id
 
         // Add submenu for actions
         let submenu = NSMenu()
+
+        // Show details if available (verbosity level 1)
+        if let details = session.details, !details.isEmpty {
+            let detailsItem = NSMenuItem(title: "📋 \(details)", action: nil, keyEquivalent: "")
+            detailsItem.isEnabled = false
+            submenu.addItem(detailsItem)
+            submenu.addItem(NSMenuItem.separator())
+        }
+
+        // Show terminal info
+        let infoItem = NSMenuItem(title: "📍 \(session.terminalInfo)", action: nil, keyEquivalent: "")
+        infoItem.isEnabled = false
+        submenu.addItem(infoItem)
+
+        submenu.addItem(NSMenuItem.separator())
 
         let goItem = NSMenuItem(title: "Go There", action: #selector(goToSession(_:)), keyEquivalent: "")
         goItem.target = self
@@ -175,6 +198,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             submenu.addItem(snooze60)
         }
 
+        // Speak summary option
+        submenu.addItem(NSMenuItem.separator())
+
+        let speakItem = NSMenuItem(title: "🔊 Speak Summary", action: #selector(speakSessionSummary(_:)), keyEquivalent: "")
+        speakItem.target = self
+        speakItem.representedObject = session.id
+        submenu.addItem(speakItem)
+
         submenu.addItem(NSMenuItem.separator())
 
         let removeItem = NSMenuItem(title: "Remove", action: #selector(removeSession(_:)), keyEquivalent: "")
@@ -185,6 +216,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         item.submenu = submenu
 
         return item
+    }
+
+    @objc func speakSessionSummary(_ sender: NSMenuItem) {
+        guard let sessionId = sender.representedObject as? String,
+              let session = sessionManager.sessions.first(where: { $0.id == sessionId }) else { return }
+        sessionManager.speakSummary(session)
     }
 
     func updateIconBadge() {
