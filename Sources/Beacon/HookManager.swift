@@ -174,25 +174,43 @@ class HookManager {
         task_summary=$(generate_summary)
         task_details=$(git log -1 --format="%s" 2>/dev/null || echo "")
 
-        # Detect terminal
+        # Detect terminal and capture identifiers for window switching
+        wezterm_pane=""
+        tty_name=""
+        pycharm_window=""
+
+        # Get TTY for any terminal
+        tty_name=$(tty 2>/dev/null | sed 's|/dev/||' || echo "")
+
         if [[ -n "$WEZTERM_PANE" ]]; then
-            app_name="WezTerm"; tab_info="WezTerm pane $((WEZTERM_PANE + 1))"
+            app_name="WezTerm"
+            tab_info="WezTerm"
+            wezterm_pane="$WEZTERM_PANE"
         elif [[ -n "$ITERM_SESSION_ID" ]]; then
-            app_name="iTerm"; tab_info="iTerm"
+            app_name="iTerm"
+            tab_info="iTerm"
         elif [[ "$TERM_PROGRAM" == "vscode" ]] || [[ -n "$VSCODE_INJECTION" ]]; then
-            app_name="Cursor"; tab_info="Cursor"
+            app_name="Cursor"
+            tab_info="Cursor"
         elif [[ -n "$TERMINAL_EMULATOR" ]] && [[ "$TERMINAL_EMULATOR" == *"JetBrains"* ]]; then
-            app_name="PyCharm"; tab_info="PyCharm"
+            app_name="PyCharm"
+            tab_info="PyCharm"
+            # Get PyCharm front window name to identify project
+            pycharm_window=$(osascript -e 'tell application "System Events" to tell process "pycharm" to get name of front window' 2>/dev/null | cut -d' ' -f1 || echo "")
+        elif [[ "$TERM_PROGRAM" == "Apple_Terminal" ]] || [[ -z "$TERM_PROGRAM" ]]; then
+            app_name="Terminal"
+            tab_info="Terminal"
         else
-            app_name="Terminal"; tab_info="Terminal"
+            app_name="${TERM_PROGRAM:-Terminal}"
+            tab_info="${TERM_PROGRAM:-Terminal}"
         fi
 
-        # Send to Beacon (Beacon handles notifications and sounds)
+        # Send to Beacon with navigation info
         SESSION_ID="$$-$(date +%s)"
         escaped_details=$(echo "$task_details" | sed 's/"/\\\\"/g')
         curl -s -X POST "http://localhost:${BEACON_PORT}" \\
             -H "Content-Type: application/json" \\
-            -d "{\\"id\\":\\"${SESSION_ID}\\",\\"projectName\\":\\"${project_identifier}\\",\\"terminalInfo\\":\\"${tab_info}\\",\\"workingDirectory\\":\\"${cwd}\\",\\"summary\\":\\"${task_summary}\\",\\"details\\":\\"${escaped_details}\\",\\"tag\\":\\"${session_tag}\\"}" \\
+            -d "{\\"id\\":\\"${SESSION_ID}\\",\\"projectName\\":\\"${project_identifier}\\",\\"terminalInfo\\":\\"${tab_info}\\",\\"workingDirectory\\":\\"${cwd}\\",\\"summary\\":\\"${task_summary}\\",\\"details\\":\\"${escaped_details}\\",\\"tag\\":\\"${session_tag}\\",\\"weztermPane\\":\\"${wezterm_pane}\\",\\"ttyName\\":\\"${tty_name}\\",\\"pycharmWindow\\":\\"${pycharm_window}\\"}" \\
             --connect-timeout 1 2>/dev/null &
         """
     }

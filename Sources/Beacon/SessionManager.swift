@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import UserNotifications
+import Network
 
 // MARK: - Models
 
@@ -25,6 +26,11 @@ struct ClaudeSession: Identifiable, Codable {
     var details: String?      // Full details for verbose mode
     var tag: String?          // Custom category tag (e.g., "backend", "frontend")
 
+    // Navigation hints from hook
+    var weztermPane: String?  // WezTerm pane ID
+    var ttyName: String?      // TTY name for Terminal.app
+    var pycharmWindow: String? // PyCharm window/project name
+
     init(
         id: String = UUID().uuidString,
         projectName: String,
@@ -37,7 +43,10 @@ struct ClaudeSession: Identifiable, Codable {
         pid: Int32? = nil,
         summary: String? = nil,
         details: String? = nil,
-        tag: String? = nil
+        tag: String? = nil,
+        weztermPane: String? = nil,
+        ttyName: String? = nil,
+        pycharmWindow: String? = nil
     ) {
         self.id = id
         self.projectName = projectName
@@ -51,6 +60,9 @@ struct ClaudeSession: Identifiable, Codable {
         self.summary = summary
         self.details = details
         self.tag = tag
+        self.weztermPane = weztermPane
+        self.ttyName = ttyName
+        self.pycharmWindow = pycharmWindow
     }
 
 
@@ -75,6 +87,8 @@ class SessionManager {
     private var knownPids: Set<Int32> = []
     private var ignoredPids: Set<Int32> = []  // PIDs to ignore (user marked as complete)
     private let settingsURL: URL
+    private let scanQueue = DispatchQueue(label: "com.beacon.scanQueue")  // Serial queue to prevent race conditions
+    private var httpListener: NWListener?
 
     // Settings
     var notificationEnabled: Bool = true {
@@ -106,6 +120,118 @@ class SessionManager {
         loadSessions()
         loadSettings()
         requestNotificationPermission()
+        startHttpServer()
+    }
+
+    // MARK: - HTTP Server for Hook Data
+
+    private func startHttpServer() {
+        do {
+            let params = NWParameters.tcp
+            params.allowLocalEndpointReuse = true
+            httpListener = try NWListener(using: params, on: 19876)
+
+            httpListener?.newConnectionHandler = { [weak self] connection in
+                self?.handleConnection(connection)
+            }
+
+            httpListener?.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    print("Beacon HTTP server listening on port 19876")
+                case .failed(let error):
+                    print("Beacon HTTP server failed: \(error)")
+                default:
+                    break
+                }
+            }
+
+            httpListener?.start(queue: .global())
+        } catch {
+            print("Failed to start HTTP server: \(error)")
+        }
+    }
+
+    private func handleConnection(_ connection: NWConnection) {
+        connection.start(queue: .global())
+
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
+            guard let data = data, let self = self else {
+                connection.cancel()
+                return
+            }
+
+            // Parse HTTP request to extract JSON body
+            if let requestString = String(data: data, encoding: .utf8),
+               let jsonStart = requestString.range(of: "\r\n\r\n")?.upperBound {
+                let jsonString = String(requestString[jsonStart...])
+                self.handleHookData(jsonString)
+            }
+
+            // Send HTTP 200 response
+            let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"
+            connection.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in
+                connection.cancel()
+            })
+        }
+    }
+
+    private func handleHookData(_ jsonString: String) {
+        guard let data = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+
+        let projectName = json["projectName"] as? String ?? "Unknown"
+        let terminalInfo = json["terminalInfo"] as? String ?? "Terminal"
+        let workingDirectory = json["workingDirectory"] as? String ?? ""
+        let summary = json["summary"] as? String
+        let details = json["details"] as? String
+        let tag = json["tag"] as? String
+        let weztermPane = json["weztermPane"] as? String
+        let ttyName = json["ttyName"] as? String
+        let pycharmWindow = json["pycharmWindow"] as? String
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            // Find existing running session with same working directory or create new completed session
+            if let index = self.sessions.firstIndex(where: {
+                $0.workingDirectory == workingDirectory && $0.status == .running
+            }) {
+                // Update existing session with hook data and mark completed
+                self.sessions[index].summary = summary
+                self.sessions[index].details = details
+                self.sessions[index].tag = tag
+                self.sessions[index].weztermPane = weztermPane
+                self.sessions[index].ttyName = ttyName
+                self.sessions[index].pycharmWindow = pycharmWindow
+                self.sessions[index].status = .completed
+                self.sessions[index].completedAt = Date()
+                self.sendCompletionNotification(for: self.sessions[index])
+            } else {
+                // Create new completed session from hook
+                let session = ClaudeSession(
+                    projectName: projectName,
+                    terminalInfo: terminalInfo,
+                    workingDirectory: workingDirectory,
+                    status: .completed,
+                    completedAt: Date(),
+                    summary: summary,
+                    details: details,
+                    tag: tag,
+                    weztermPane: weztermPane,
+                    ttyName: ttyName,
+                    pycharmWindow: pycharmWindow
+                )
+                self.sessions.insert(session, at: 0)
+                self.sendCompletionNotification(for: session)
+            }
+
+            self.saveSessions()
+            self.trimOldSessions()
+            self.onSessionsChanged?()
+        }
     }
 
     private func requestNotificationPermission() {
@@ -120,13 +246,14 @@ class SessionManager {
 
     func startMonitoring() {
         // Defer initial scan to background to avoid blocking startup
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        scanQueue.async { [weak self] in
             self?.scanForSessions()
         }
 
         // Monitor every 2 seconds for new/completed sessions
+        // Use serial scanQueue to prevent race conditions causing duplicate notifications
         monitorTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            DispatchQueue.global(qos: .userInitiated).async {
+            self?.scanQueue.async {
                 self?.scanForSessions()
             }
         }
@@ -192,12 +319,8 @@ class SessionManager {
 
                 // Check if we already have a session for this PID
                 if !sessions.contains(where: { $0.pid == process.pid && $0.status == .running }) {
-                    let pathURL = URL(fileURLWithPath: process.cwd)
-                    let folderName = pathURL.lastPathComponent
-                    let parentName = pathURL.deletingLastPathComponent().lastPathComponent
-
-                    // Show "parent/folder" for better context (e.g., "vitess-ops/eagleeye")
-                    let projectName = parentName.isEmpty || parentName == "/" ? folderName : "\(parentName)/\(folderName)"
+                    // Try to find git root for better project name
+                    let projectName = getProjectName(for: process.cwd, terminal: process.terminal)
 
                     let session = ClaudeSession(
                         projectName: projectName,
@@ -239,6 +362,94 @@ class SessionManager {
         let pid: Int32
         let cwd: String
         let terminal: String
+    }
+
+    func getProjectName(for cwd: String, terminal: String) -> String {
+        // For PyCharm, try to get project name from window titles
+        if terminal == "PyCharm" {
+            if let pyCharmProject = getPyCharmProjectForPath(cwd) {
+                // Show PyCharm project and working directory if different
+                let cwdName = URL(fileURLWithPath: cwd).lastPathComponent
+                if pyCharmProject.lowercased() != cwdName.lowercased() {
+                    return "\(pyCharmProject):\(cwdName)"
+                }
+                return pyCharmProject
+            }
+        }
+
+        // Try to find git root for better project name
+        let gitTask = Process()
+        gitTask.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        gitTask.arguments = ["-C", cwd, "rev-parse", "--show-toplevel"]
+        gitTask.currentDirectoryURL = URL(fileURLWithPath: cwd)
+
+        let pipe = Pipe()
+        gitTask.standardOutput = pipe
+        gitTask.standardError = FileHandle.nullDevice
+
+        do {
+            try gitTask.run()
+            gitTask.waitUntilExit()
+
+            if gitTask.terminationStatus == 0 {
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let gitRoot = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                if !gitRoot.isEmpty {
+                    let projectName = URL(fileURLWithPath: gitRoot).lastPathComponent
+
+                    // If cwd is different from git root, show subdirectory
+                    if cwd != gitRoot {
+                        let relativePath = cwd.replacingOccurrences(of: gitRoot + "/", with: "")
+                        return "\(projectName)/\(relativePath)"
+                    }
+                    return projectName
+                }
+            }
+        } catch {
+            // Fall through to fallback
+        }
+
+        // Fallback: use folder name
+        return URL(fileURLWithPath: cwd).lastPathComponent
+    }
+
+    func getPyCharmProjectForPath(_ cwd: String) -> String? {
+        // Get PyCharm window titles via AppleScript
+        let script = """
+            tell application "System Events"
+                tell process "pycharm"
+                    set windowNames to name of every window
+                    set output to ""
+                    repeat with wName in windowNames
+                        set output to output & wName & "|||"
+                    end repeat
+                    return output
+                end tell
+            end tell
+            """
+
+        var error: NSDictionary?
+        guard let appleScript = NSAppleScript(source: script),
+              let result = appleScript.executeAndReturnError(&error).stringValue else {
+            return nil
+        }
+
+        // Parse window names (format: "projectname – filename")
+        let windowNames = result.components(separatedBy: "|||").filter { !$0.isEmpty }
+        let cwdComponents = cwd.lowercased().components(separatedBy: "/")
+
+        for windowName in windowNames {
+            // Extract project name (before " – ")
+            let projectName = windowName.components(separatedBy: " – ").first?.trimmingCharacters(in: .whitespaces) ?? windowName
+
+            // Check if cwd contains this project name
+            if cwdComponents.contains(projectName.lowercased()) {
+                return projectName
+            }
+        }
+
+        return nil
     }
 
     func findClaudeProcesses() -> [ClaudeProcess] {
@@ -427,15 +638,35 @@ class SessionManager {
 
         let appName = session.terminalInfo
 
-        // Special handling for WezTerm - activate specific pane
+        // Special handling for WezTerm - use stored pane ID if available
         if appName == "WezTerm" {
-            activateWezTermPane(workingDirectory: session.workingDirectory)
+            if let paneId = session.weztermPane, !paneId.isEmpty {
+                activateWezTermPaneById(paneId: paneId)
+            } else {
+                activateWezTermPane(workingDirectory: session.workingDirectory)
+            }
             return
         }
 
-        // Special handling for Terminal.app - activate specific tab by TTY
-        if appName.hasPrefix("Terminal"), let pid = session.pid {
-            activateTerminalTab(pid: pid, workingDirectory: session.workingDirectory)
+        // Special handling for Terminal.app - use stored TTY if available
+        if appName.hasPrefix("Terminal") {
+            if let tty = session.ttyName, !tty.isEmpty {
+                activateTerminalByTty(tty: tty)
+            } else if let pid = session.pid {
+                activateTerminalTab(pid: pid, workingDirectory: session.workingDirectory)
+            } else {
+                activateApp("Terminal")
+            }
+            return
+        }
+
+        // Special handling for PyCharm - use stored window name if available
+        if appName == "PyCharm" {
+            if let windowName = session.pycharmWindow, !windowName.isEmpty {
+                activatePyCharmWindowByName(windowName: windowName)
+            } else {
+                activatePyCharmWindow(projectName: session.projectName, workingDirectory: session.workingDirectory)
+            }
             return
         }
 
@@ -453,30 +684,124 @@ class SessionManager {
         }
     }
 
-    func activateTerminalTab(pid: Int32, workingDirectory: String) {
-        // Get TTY for the process
-        let ttyTask = Process()
-        ttyTask.executableURL = URL(fileURLWithPath: "/bin/ps")
-        ttyTask.arguments = ["-p", "\(pid)", "-o", "tty="]
-
-        let pipe = Pipe()
-        ttyTask.standardOutput = pipe
-
-        var tty = ""
-        do {
-            try ttyTask.run()
-            ttyTask.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            tty = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        } catch {
-            // Continue with empty tty
+    func activateWezTermPaneById(paneId: String) {
+        let weztermPaths = ["/opt/homebrew/bin/wezterm", "/usr/local/bin/wezterm"]
+        var weztermPath = ""
+        for path in weztermPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                weztermPath = path
+                break
+            }
         }
 
-        // Try TTY matching first, then fall back to path matching
+        guard !weztermPath.isEmpty else {
+            activateApp("WezTerm")
+            return
+        }
+
+        let script = """
+            do shell script "\(weztermPath) cli activate-pane --pane-id \(paneId)"
+            tell application "WezTerm" to activate
+            """
+        var error: NSDictionary?
+        if let appleScript = NSAppleScript(source: script) {
+            appleScript.executeAndReturnError(&error)
+        }
+    }
+
+    func activateTerminalByTty(tty: String) {
         let script = """
             tell application "Terminal"
-                -- Try TTY matching first
+                activate
+                set targetTTY to "/dev/\(tty)"
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        try
+                            if tty of t is targetTTY then
+                                set selected of t to true
+                                set frontmost of w to true
+                                return
+                            end if
+                        end try
+                    end repeat
+                end repeat
+            end tell
+            """
+        var error: NSDictionary?
+        if let appleScript = NSAppleScript(source: script) {
+            appleScript.executeAndReturnError(&error)
+        }
+    }
+
+    func activatePyCharmWindowByName(windowName: String) {
+        let script = """
+            tell application "System Events"
+                tell process "pycharm"
+                    repeat with w in windows
+                        if name of w starts with "\(windowName)" then
+                            tell application "PyCharm" to activate
+                            perform action "AXRaise" of w
+                            return
+                        end if
+                    end repeat
+                end tell
+            end tell
+            tell application "PyCharm" to activate
+            """
+        var error: NSDictionary?
+        if let appleScript = NSAppleScript(source: script) {
+            appleScript.executeAndReturnError(&error)
+        }
+    }
+
+    func activatePyCharmWindow(projectName: String, workingDirectory: String) {
+        // Extract potential project names to match against window titles
+        var searchTerms = projectName.components(separatedBy: ":")
+        searchTerms += projectName.components(separatedBy: "/")
+        searchTerms.append(URL(fileURLWithPath: workingDirectory).lastPathComponent)
+        searchTerms = Array(Set(searchTerms.filter { !$0.isEmpty }))
+
+        // Try each search term
+        for term in searchTerms {
+            let script = """
+                tell application "System Events"
+                    tell process "pycharm"
+                        repeat with w in windows
+                            if name of w starts with "\(term)" then
+                                tell application "PyCharm" to activate
+                                perform action "AXRaise" of w
+                                return "found"
+                            end if
+                        end repeat
+                    end tell
+                end tell
+                return "not found"
+                """
+
+            var error: NSDictionary?
+            if let appleScript = NSAppleScript(source: script),
+               let result = appleScript.executeAndReturnError(&error).stringValue,
+               result == "found" {
+                return
+            }
+        }
+
+        // Fallback: just activate PyCharm
+        activateApp("PyCharm")
+    }
+
+    func activateTerminalTab(pid: Int32, workingDirectory: String) {
+        // Get TTY via shell (more reliable)
+        let ttyScript = """
+            do shell script "ps -p \(pid) -o tty= | tr -d ' '"
+            """
+        var ttyError: NSDictionary?
+        let tty = NSAppleScript(source: ttyScript)?.executeAndReturnError(&ttyError).stringValue ?? ""
+
+        // Activate Terminal tab by TTY
+        let script = """
+            tell application "Terminal"
+                activate
                 if "\(tty)" is not "" and "\(tty)" is not "??" then
                     set targetTTY to "/dev/\(tty)"
                     repeat with w in windows
@@ -485,33 +810,12 @@ class SessionManager {
                                 if tty of t is targetTTY then
                                     set selected of t to true
                                     set frontmost of w to true
-                                    activate
-                                    return "found by tty"
+                                    return "found"
                                 end if
                             end try
                         end repeat
                     end repeat
                 end if
-
-                -- Fallback: match by working directory in tab name
-                set targetPath to "\(workingDirectory)"
-                set targetName to do shell script "basename " & quoted form of targetPath
-                repeat with w in windows
-                    repeat with t in tabs of w
-                        try
-                            if name of t contains targetName then
-                                set selected of t to true
-                                set frontmost of w to true
-                                activate
-                                return "found by name"
-                            end if
-                        end try
-                    end repeat
-                end repeat
-
-                -- Just activate if nothing found
-                activate
-                return "not found"
             end tell
             """
 
@@ -522,61 +826,66 @@ class SessionManager {
     }
 
     func activateWezTermPane(workingDirectory: String) {
-        // First, get list of panes from WezTerm
-        let listTask = Process()
-        listTask.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        listTask.arguments = ["wezterm", "cli", "list", "--format", "json"]
+        // Find wezterm binary (check common locations)
+        let weztermPaths = [
+            "/opt/homebrew/bin/wezterm",
+            "/usr/local/bin/wezterm",
+            "/Applications/WezTerm.app/Contents/MacOS/wezterm"
+        ]
 
-        let pipe = Pipe()
-        listTask.standardOutput = pipe
-        listTask.standardError = FileHandle.nullDevice
+        var weztermPath = ""
+        for path in weztermPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                weztermPath = path
+                break
+            }
+        }
 
-        do {
-            try listTask.run()
-            listTask.waitUntilExit()
+        guard !weztermPath.isEmpty else {
+            activateApp("WezTerm")
+            return
+        }
 
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        // Get pane list
+        let script = """
+            do shell script "\(weztermPath) cli list --format json"
+            """
 
-            // Parse JSON to find pane with matching CWD
-            if let panes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-                for pane in panes {
-                    if let cwd = pane["cwd"] as? String {
-                        // CWD comes as file:///path format
-                        let cleanCwd = cwd.replacingOccurrences(of: "file://", with: "")
-                        if cleanCwd == workingDirectory {
-                            if let paneId = pane["pane_id"] as? Int {
-                                // Activate the pane
-                                let activateTask = Process()
-                                activateTask.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                                activateTask.arguments = ["wezterm", "cli", "activate-pane", "--pane-id", "\(paneId)"]
-                                try? activateTask.run()
-                                activateTask.waitUntilExit()
+        var error: NSDictionary?
+        guard let appleScript = NSAppleScript(source: script),
+              let result = appleScript.executeAndReturnError(&error).stringValue,
+              let data = result.data(using: .utf8),
+              let panes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            activateApp("WezTerm")
+            return
+        }
 
-                                // Also bring WezTerm to front
-                                let script = """
-                                    tell application "WezTerm"
-                                        activate
-                                    end tell
-                                    """
-                                var error: NSDictionary?
-                                if let appleScript = NSAppleScript(source: script) {
-                                    appleScript.executeAndReturnError(&error)
-                                }
-                                return
-                            }
+        // Find pane with matching CWD
+        for pane in panes {
+            if let cwd = pane["cwd"] as? String {
+                let cleanCwd = cwd.replacingOccurrences(of: "file://", with: "")
+                if cleanCwd == workingDirectory {
+                    if let paneId = pane["pane_id"] as? Int {
+                        let activateScript = """
+                            do shell script "\(weztermPath) cli activate-pane --pane-id \(paneId)"
+                            tell application "WezTerm" to activate
+                            """
+                        var activateError: NSDictionary?
+                        if let s = NSAppleScript(source: activateScript) {
+                            s.executeAndReturnError(&activateError)
                         }
+                        return
                     }
                 }
             }
-        } catch {
-            // Fallback to just activating WezTerm
         }
 
-        // Fallback: just activate WezTerm
+        activateApp("WezTerm")
+    }
+
+    func activateApp(_ appName: String) {
         let script = """
-            tell application "WezTerm"
-                activate
-            end tell
+            tell application "\(appName)" to activate
             """
         var error: NSDictionary?
         if let appleScript = NSAppleScript(source: script) {

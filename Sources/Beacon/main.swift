@@ -58,8 +58,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 sectionItem.isEnabled = false
                 menu.addItem(sectionItem)
 
+                // Track duplicates to add suffixes
+                var nameCounts: [String: Int] = [:]
+                var nameIndices: [String: Int] = [:]
+
+                // First pass: count occurrences
                 for session in running {
-                    let item = createSessionMenuItem(session)
+                    let key = "\(session.terminalInfo)|\(session.projectName)"
+                    nameCounts[key, default: 0] += 1
+                }
+
+                // Second pass: create menu items with suffixes for duplicates
+                for session in running {
+                    let key = "\(session.terminalInfo)|\(session.projectName)"
+                    let count = nameCounts[key] ?? 1
+                    var suffix = ""
+                    if count > 1 {
+                        nameIndices[key, default: 0] += 1
+                        suffix = " #\(nameIndices[key]!)"
+                    }
+                    let item = createSessionMenuItem(session, suffix: suffix)
                     menu.addItem(item)
                 }
                 menu.addItem(NSMenuItem.separator())
@@ -179,9 +197,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateIconBadge()
     }
 
-    func createSessionMenuItem(_ session: ClaudeSession) -> NSMenuItem {
+    func createSessionMenuItem(_ session: ClaudeSession, suffix: String = "") -> NSMenuItem {
         // Show terminal and project name prominently
-        let title = "  \(session.terminalInfo) · \(session.projectName)"
+        let title = "  \(session.terminalInfo) · \(session.projectName)\(suffix)"
 
         // No action on main item - clicking opens submenu, menu stays open
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -189,6 +207,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Add submenu for actions
         let submenu = NSMenu()
+
+        // Show working directory for context
+        let cwdItem = NSMenuItem(title: session.workingDirectory, action: nil, keyEquivalent: "")
+        cwdItem.isEnabled = false
+        submenu.addItem(cwdItem)
+        submenu.addItem(NSMenuItem.separator())
 
         // Only show "Show" for non-background sessions
         if session.terminalInfo != "Background" {
