@@ -1,0 +1,261 @@
+import AppKit
+
+// MARK: - App Delegate
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var statusItem: NSStatusItem!
+    var sessionManager: SessionManager!
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Initialize session manager FIRST
+        sessionManager = SessionManager.shared
+        sessionManager.onSessionsChanged = { [weak self] in
+            DispatchQueue.main.async {
+                self?.updateMenu()
+            }
+        }
+
+        // Setup menu bar (needs sessionManager to be initialized)
+        setupMenuBar()
+
+        // Start monitoring
+        sessionManager.startMonitoring()
+
+        print("Beacon is running in the menu bar")
+    }
+
+    func setupMenuBar() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+
+        if let button = statusItem.button {
+            button.image = NSImage(systemSymbolName: "bell.badge", accessibilityDescription: "Beacon")
+            button.image?.isTemplate = true
+        }
+
+        updateMenu()
+    }
+
+    func updateMenu() {
+        let menu = NSMenu()
+
+        // Header
+        let headerItem = NSMenuItem(title: "Beacon - Claude Sessions", action: nil, keyEquivalent: "")
+        headerItem.isEnabled = false
+        menu.addItem(headerItem)
+        menu.addItem(NSMenuItem.separator())
+
+        let sessions = sessionManager.sessions
+
+        if sessions.isEmpty {
+            let emptyItem = NSMenuItem(title: "No active sessions", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            menu.addItem(emptyItem)
+        } else {
+            // Needs Attention
+            let needsAttention = sessions.filter { $0.status == .completed }
+            if !needsAttention.isEmpty {
+                let sectionItem = NSMenuItem(title: "⚠️ Needs Attention (\(needsAttention.count))", action: nil, keyEquivalent: "")
+                sectionItem.isEnabled = false
+                menu.addItem(sectionItem)
+
+                for session in needsAttention {
+                    let item = createSessionMenuItem(session)
+                    menu.addItem(item)
+                }
+                menu.addItem(NSMenuItem.separator())
+            }
+
+            // Snoozed
+            let snoozed = sessions.filter { $0.status == .snoozed }
+            if !snoozed.isEmpty {
+                let sectionItem = NSMenuItem(title: "💤 Snoozed (\(snoozed.count))", action: nil, keyEquivalent: "")
+                sectionItem.isEnabled = false
+                menu.addItem(sectionItem)
+
+                for session in snoozed {
+                    let item = createSessionMenuItem(session)
+                    menu.addItem(item)
+                }
+                menu.addItem(NSMenuItem.separator())
+            }
+
+            // Running
+            let running = sessions.filter { $0.status == .running }
+            if !running.isEmpty {
+                let sectionItem = NSMenuItem(title: "🔄 Running (\(running.count))", action: nil, keyEquivalent: "")
+                sectionItem.isEnabled = false
+                menu.addItem(sectionItem)
+
+                for session in running {
+                    let item = createSessionMenuItem(session)
+                    menu.addItem(item)
+                }
+                menu.addItem(NSMenuItem.separator())
+            }
+
+            // Acknowledged
+            let acknowledged = sessions.filter { $0.status == .acknowledged }
+            if !acknowledged.isEmpty {
+                let sectionItem = NSMenuItem(title: "✅ Acknowledged (\(acknowledged.count))", action: nil, keyEquivalent: "")
+                sectionItem.isEnabled = false
+                menu.addItem(sectionItem)
+
+                for session in acknowledged.prefix(5) {
+                    let item = createSessionMenuItem(session)
+                    menu.addItem(item)
+                }
+
+                if acknowledged.count > 5 {
+                    let moreItem = NSMenuItem(title: "  ... and \(acknowledged.count - 5) more", action: nil, keyEquivalent: "")
+                    moreItem.isEnabled = false
+                    menu.addItem(moreItem)
+                }
+                menu.addItem(NSMenuItem.separator())
+            }
+        }
+
+        // Actions
+        menu.addItem(NSMenuItem.separator())
+
+        let clearItem = NSMenuItem(title: "Clear Acknowledged", action: #selector(clearAcknowledged), keyEquivalent: "")
+        clearItem.target = self
+        menu.addItem(clearItem)
+
+        let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refresh), keyEquivalent: "r")
+        refreshItem.target = self
+        menu.addItem(refreshItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let quitItem = NSMenuItem(title: "Quit Beacon", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        statusItem.menu = menu
+
+        // Update icon badge
+        updateIconBadge()
+    }
+
+    func createSessionMenuItem(_ session: ClaudeSession) -> NSMenuItem {
+        let title = "  \(session.projectName) - \(session.terminalInfo)"
+        let item = NSMenuItem(title: title, action: #selector(sessionClicked(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = session.id
+
+        // Add submenu for actions
+        let submenu = NSMenu()
+
+        let goItem = NSMenuItem(title: "Go There", action: #selector(goToSession(_:)), keyEquivalent: "")
+        goItem.target = self
+        goItem.representedObject = session.id
+        submenu.addItem(goItem)
+
+        if session.status == .completed {
+            let ackItem = NSMenuItem(title: "Acknowledge", action: #selector(acknowledgeSession(_:)), keyEquivalent: "")
+            ackItem.target = self
+            ackItem.representedObject = session.id
+            submenu.addItem(ackItem)
+
+            submenu.addItem(NSMenuItem.separator())
+
+            let snooze5 = NSMenuItem(title: "Snooze 5 min", action: #selector(snooze5(_:)), keyEquivalent: "")
+            snooze5.target = self
+            snooze5.representedObject = session.id
+            submenu.addItem(snooze5)
+
+            let snooze15 = NSMenuItem(title: "Snooze 15 min", action: #selector(snooze15(_:)), keyEquivalent: "")
+            snooze15.target = self
+            snooze15.representedObject = session.id
+            submenu.addItem(snooze15)
+
+            let snooze60 = NSMenuItem(title: "Snooze 1 hour", action: #selector(snooze60(_:)), keyEquivalent: "")
+            snooze60.target = self
+            snooze60.representedObject = session.id
+            submenu.addItem(snooze60)
+        }
+
+        submenu.addItem(NSMenuItem.separator())
+
+        let removeItem = NSMenuItem(title: "Remove", action: #selector(removeSession(_:)), keyEquivalent: "")
+        removeItem.target = self
+        removeItem.representedObject = session.id
+        submenu.addItem(removeItem)
+
+        item.submenu = submenu
+
+        return item
+    }
+
+    func updateIconBadge() {
+        let needsAttention = sessionManager.sessions.filter { $0.status == .completed }.count
+
+        if let button = statusItem.button {
+            if needsAttention > 0 {
+                button.image = NSImage(systemSymbolName: "bell.badge.fill", accessibilityDescription: "Beacon - \(needsAttention) tasks")
+            } else {
+                button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Beacon")
+            }
+            button.image?.isTemplate = true
+        }
+    }
+
+    // MARK: - Actions
+
+    @objc func sessionClicked(_ sender: NSMenuItem) {
+        guard let sessionId = sender.representedObject as? String else { return }
+        sessionManager.navigateToSession(id: sessionId)
+    }
+
+    @objc func goToSession(_ sender: NSMenuItem) {
+        guard let sessionId = sender.representedObject as? String else { return }
+        sessionManager.navigateToSession(id: sessionId)
+        sessionManager.acknowledgeSession(id: sessionId)
+    }
+
+    @objc func acknowledgeSession(_ sender: NSMenuItem) {
+        guard let sessionId = sender.representedObject as? String else { return }
+        sessionManager.acknowledgeSession(id: sessionId)
+    }
+
+    @objc func snooze5(_ sender: NSMenuItem) {
+        guard let sessionId = sender.representedObject as? String else { return }
+        sessionManager.snoozeSession(id: sessionId, duration: 5 * 60)
+    }
+
+    @objc func snooze15(_ sender: NSMenuItem) {
+        guard let sessionId = sender.representedObject as? String else { return }
+        sessionManager.snoozeSession(id: sessionId, duration: 15 * 60)
+    }
+
+    @objc func snooze60(_ sender: NSMenuItem) {
+        guard let sessionId = sender.representedObject as? String else { return }
+        sessionManager.snoozeSession(id: sessionId, duration: 60 * 60)
+    }
+
+    @objc func removeSession(_ sender: NSMenuItem) {
+        guard let sessionId = sender.representedObject as? String else { return }
+        sessionManager.removeSession(id: sessionId)
+    }
+
+    @objc func clearAcknowledged() {
+        sessionManager.clearAcknowledged()
+    }
+
+    @objc func refresh() {
+        sessionManager.scanForSessions()
+        updateMenu()
+    }
+
+    @objc func quit() {
+        NSApplication.shared.terminate(nil)
+    }
+}
+
+// MARK: - Main
+
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.setActivationPolicy(.accessory) // Menu bar app, no dock icon
+app.run()
