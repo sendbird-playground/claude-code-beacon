@@ -6,6 +6,8 @@
     <string>Beacon</string>
     <key>CFBundleExecutable</key>
     <string>Beacon</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>com.beacon.app</string>
     <key>CFBundleName</key>

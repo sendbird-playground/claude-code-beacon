@@ -10,8 +10,10 @@ swift build -c release
 echo "Creating app bundle..."
 rm -rf Beacon.app
 mkdir -p Beacon.app/Contents/MacOS
+mkdir -p Beacon.app/Contents/Resources
 cp .build/release/Beacon Beacon.app/Contents/MacOS/
 cp Resources/Info.plist Beacon.app/Contents/
+cp Resources/AppIcon.icns Beacon.app/Contents/Resources/
 
 echo "Installing to /Applications..."
 rm -rf /Applications/Beacon.app
