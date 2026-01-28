@@ -1623,6 +1623,7 @@ class SessionManager {
         }
 
         // Speak if enabled
+        NSLog("Voice check: shouldVoice=\(shouldVoice), voiceEnabled=\(voiceEnabled)")
         if shouldVoice {
             speakSummary(session)
         }
@@ -1734,10 +1735,16 @@ class SessionManager {
 
     func speakSummary(_ session: ClaudeSession) {
         let textToSpeak = applyPronunciationRules(session.projectName)
+        NSLog("Speaking: \(textToSpeak)")
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/say")
         task.arguments = [textToSpeak]
-        try? task.run()
+        do {
+            try task.run()
+            NSLog("Speech task started successfully")
+        } catch {
+            NSLog("Failed to start speech: \(error)")
+        }
     }
 
     func applyPronunciationRules(_ text: String) -> String {
