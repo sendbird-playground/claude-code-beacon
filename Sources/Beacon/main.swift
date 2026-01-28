@@ -73,64 +73,56 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             emptyItem.isEnabled = false
             menu.addItem(emptyItem)
         } else {
-            // Running sessions
-            let running = sessions.filter { $0.status == .running }
-            if !running.isEmpty {
-                let sectionItem = NSMenuItem(title: "🔄 Running (\(running.count))", action: nil, keyEquivalent: "")
-                sectionItem.isEnabled = false
-                menu.addItem(sectionItem)
-
-                // Track duplicates to add suffixes
-                var nameCounts: [String: Int] = [:]
-                var nameIndices: [String: Int] = [:]
-
-                // First pass: count occurrences
-                for session in running {
-                    let key = "\(session.terminalInfo)|\(session.projectName)"
-                    nameCounts[key, default: 0] += 1
+            // Sort: running first, then by completedAt descending (most recent first)
+            let sorted = sessions.sorted { a, b in
+                // Running sessions come first
+                if a.status == .running && b.status != .running { return true }
+                if a.status != .running && b.status == .running { return false }
+                // Both running: sort by createdAt descending
+                if a.status == .running && b.status == .running {
+                    return a.createdAt > b.createdAt
                 }
-
-                // Second pass: create menu items with suffixes for duplicates
-                for session in running {
-                    let key = "\(session.terminalInfo)|\(session.projectName)"
-                    let count = nameCounts[key] ?? 1
-                    var suffix = ""
-                    if count > 1 {
-                        nameIndices[key, default: 0] += 1
-                        suffix = " #\(nameIndices[key]!)"
-                    }
-                    let item = createSessionMenuItem(session, suffix: suffix)
-                    menu.addItem(item)
-                }
-                menu.addItem(NSMenuItem.separator())
+                // Both completed: sort by completedAt descending
+                let aTime = a.completedAt ?? a.createdAt
+                let bTime = b.completedAt ?? b.createdAt
+                return aTime > bTime
             }
 
-            // Recent sessions - only show sessions that actually completed (got notifications)
-            let recent = sessions.filter { $0.completedAt != nil }
-            if !recent.isEmpty {
-                let sectionItem = NSMenuItem(title: "📋 Recent (\(recent.count))", action: nil, keyEquivalent: "")
-                sectionItem.isEnabled = false
-                menu.addItem(sectionItem)
+            // Track duplicates to add suffixes
+            var nameCounts: [String: Int] = [:]
+            var nameIndices: [String: Int] = [:]
 
-                let maxToShow = sessionManager.maxRecentSessions
-                for session in recent.prefix(maxToShow) {
-                    let item = createSessionMenuItem(session)
-                    menu.addItem(item)
-                }
+            // First pass: count occurrences
+            for session in sorted {
+                let key = "\(session.terminalInfo)|\(session.projectName)"
+                nameCounts[key, default: 0] += 1
+            }
 
-                if recent.count > maxToShow {
-                    let moreItem = NSMenuItem(title: "  ... and \(recent.count - maxToShow) more", action: nil, keyEquivalent: "")
-                    moreItem.isEnabled = false
-                    menu.addItem(moreItem)
+            // Second pass: create menu items
+            let maxToShow = sessionManager.maxRecentSessions
+            for session in sorted.prefix(maxToShow) {
+                let key = "\(session.terminalInfo)|\(session.projectName)"
+                let count = nameCounts[key] ?? 1
+                var suffix = ""
+                if count > 1 {
+                    nameIndices[key, default: 0] += 1
+                    suffix = " #\(nameIndices[key]!)"
                 }
-                menu.addItem(NSMenuItem.separator())
+                let item = createSessionMenuItem(session, suffix: suffix)
+                menu.addItem(item)
+            }
+
+            if sorted.count > maxToShow {
+                let moreItem = NSMenuItem(title: "  ... and \(sorted.count - maxToShow) more", action: nil, keyEquivalent: "")
+                moreItem.isEnabled = false
+                menu.addItem(moreItem)
             }
         }
 
         // Actions
         menu.addItem(NSMenuItem.separator())
 
-        let clearRecentItem = NSMenuItem(title: "Clear Recent", action: #selector(clearRecent), keyEquivalent: "")
+        let clearRecentItem = NSMenuItem(title: "Clear Completed", action: #selector(clearRecent), keyEquivalent: "")
         clearRecentItem.target = self
         menu.addItem(clearRecentItem)
 
@@ -195,8 +187,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         settingsSubmenu.addItem(NSMenuItem.separator())
 
-        // Max recent sessions submenu
-        let maxRecentItem = NSMenuItem(title: "Max Recent Sessions", action: nil, keyEquivalent: "")
+        // Max sessions to show submenu
+        let maxRecentItem = NSMenuItem(title: "Max Sessions", action: nil, keyEquivalent: "")
         let maxRecentSubmenu = NSMenu()
 
         for count in [5, 10, 20, 50] {
