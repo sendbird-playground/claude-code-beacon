@@ -426,11 +426,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     @objc func expandMenu() {
         isMenuExpanded = true
         updateMenu()
+        // Immediately reshow the menu
+        DispatchQueue.main.async {
+            if let button = self.statusItem.button {
+                self.statusItem.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 5), in: button)
+            }
+        }
     }
 
     @objc func collapseMenu() {
         isMenuExpanded = false
         updateMenu()
+        // Immediately reshow the menu
+        DispatchQueue.main.async {
+            if let button = self.statusItem.button {
+                self.statusItem.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 5), in: button)
+            }
+        }
     }
 
     // MARK: - NSMenuDelegate
