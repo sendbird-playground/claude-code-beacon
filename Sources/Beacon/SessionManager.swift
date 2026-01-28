@@ -84,6 +84,10 @@ struct ClaudeSession: Identifiable, Codable {
     // Group assignment (nil = ungrouped)
     var groupId: String?
 
+    // Reminder tracking - when alert was first triggered and how many reminders sent
+    var alertTriggeredAt: Date?
+    var remindersSent: Int = 0
+
     init(
         id: String = UUID().uuidString,
         projectName: String,
@@ -104,7 +108,9 @@ struct ClaudeSession: Identifiable, Codable {
         soundOverride: Bool? = nil,
         voiceOverride: Bool? = nil,
         reminderOverride: Bool? = nil,
-        groupId: String? = nil
+        groupId: String? = nil,
+        alertTriggeredAt: Date? = nil,
+        remindersSent: Int = 0
     ) {
         self.id = id
         self.projectName = projectName
@@ -126,6 +132,8 @@ struct ClaudeSession: Identifiable, Codable {
         self.voiceOverride = voiceOverride
         self.reminderOverride = reminderOverride
         self.groupId = groupId
+        self.alertTriggeredAt = alertTriggeredAt
+        self.remindersSent = remindersSent
     }
 
 
@@ -211,6 +219,7 @@ class SessionManager {
         registerNotificationCategories()
         requestNotificationPermission()
         startHttpServer()
+        restoreReminders()
     }
 
     // MARK: - HTTP Server for Hook Data
@@ -1494,7 +1503,7 @@ class SessionManager {
             identifier: SessionManager.notificationCategoryId,
             actions: [showAction],
             intentIdentifiers: [],
-            options: []
+            options: [.customDismissAction]  // Enable dismiss action callback
         )
 
         UNUserNotificationCenter.current().setNotificationCategories([category])
@@ -1508,6 +1517,14 @@ class SessionManager {
         let shouldSound = session.soundOverride ?? group?.soundOverride ?? soundEnabled
         let shouldVoice = session.voiceOverride ?? group?.voiceOverride ?? voiceEnabled
         let shouldRemind = session.reminderOverride ?? group?.reminderOverride ?? reminderEnabled
+
+        // Record when alert was triggered for this session
+        let triggerTime = Date()
+        if let index = sessions.firstIndex(where: { $0.id == session.id }) {
+            sessions[index].alertTriggeredAt = triggerTime
+            sessions[index].remindersSent = 0
+            saveSessions()
+        }
 
         // Send macOS notification if enabled
         if shouldNotify {
@@ -1524,7 +1541,7 @@ class SessionManager {
                 trigger: nil
             )
 
-            NSLog("Sending notification for session: \(session.projectName)")
+            NSLog("Sending notification for session: \(session.projectName), alertTriggeredAt: \(triggerTime)")
             UNUserNotificationCenter.current().add(request) { error in
                 if let error = error {
                     NSLog("Failed to deliver notification: \(error)")
@@ -1535,7 +1552,7 @@ class SessionManager {
 
             // Schedule reminders if enabled
             if shouldRemind {
-                scheduleReminders(for: session)
+                scheduleReminders(for: session, triggeredAt: triggerTime)
             }
         }
 
@@ -1550,13 +1567,15 @@ class SessionManager {
         }
     }
 
-    func scheduleReminders(for session: ClaudeSession) {
+    func scheduleReminders(for session: ClaudeSession, triggeredAt: Date) {
         let content = UNMutableNotificationContent()
         content.title = "Reminder: Task Completed"
         content.body = "\(session.terminalInfo) · \(session.projectName)"
         content.sound = .default
-        content.userInfo = ["sessionId": session.id, "isReminder": true]
+        content.userInfo = ["sessionId": session.id, "isReminder": true, "triggeredAt": triggeredAt.timeIntervalSince1970]
         content.categoryIdentifier = SessionManager.notificationCategoryId
+
+        NSLog("Scheduling reminders for session \(session.id), triggered at: \(triggeredAt)")
 
         if reminderCount == 0 {
             // Infinite: use repeating trigger
@@ -1575,30 +1594,61 @@ class SessionManager {
                 if let error = error {
                     NSLog("Failed to schedule infinite reminder: \(error)")
                 } else {
-                    NSLog("Infinite reminder scheduled every \(self.reminderInterval)s")
+                    NSLog("Infinite reminder scheduled every \(self.reminderInterval)s for session \(session.id)")
                 }
             }
         } else {
-            // Finite: schedule specific number of reminders
+            // Finite: schedule specific number of reminders at intervals from trigger time
             for i in 1...reminderCount {
-                let trigger = UNTimeIntervalNotificationTrigger(
-                    timeInterval: TimeInterval(reminderInterval * i),
-                    repeats: false
-                )
+                // Calculate when this reminder should fire based on original trigger time
+                let reminderTime = triggeredAt.addingTimeInterval(TimeInterval(reminderInterval * i))
+                let now = Date()
 
-                let request = UNNotificationRequest(
-                    identifier: "\(session.id)-reminder-\(i)",
-                    content: content,
-                    trigger: trigger
-                )
+                // Only schedule if the reminder time is in the future
+                let timeUntilReminder = reminderTime.timeIntervalSince(now)
+                if timeUntilReminder > 0 {
+                    let trigger = UNTimeIntervalNotificationTrigger(
+                        timeInterval: timeUntilReminder,
+                        repeats: false
+                    )
 
-                UNUserNotificationCenter.current().add(request) { error in
-                    if let error = error {
-                        NSLog("Failed to schedule reminder \(i): \(error)")
-                    } else {
-                        NSLog("Reminder \(i) scheduled for \(self.reminderInterval * i)s")
+                    let request = UNNotificationRequest(
+                        identifier: "\(session.id)-reminder-\(i)",
+                        content: content,
+                        trigger: trigger
+                    )
+
+                    UNUserNotificationCenter.current().add(request) { [weak self] error in
+                        if let error = error {
+                            NSLog("Failed to schedule reminder \(i): \(error)")
+                        } else {
+                            NSLog("Reminder \(i) for session \(session.id) scheduled at \(reminderTime) (in \(timeUntilReminder)s)")
+                            // Track that reminder was scheduled
+                            if let self = self, let index = self.sessions.firstIndex(where: { $0.id == session.id }) {
+                                self.sessions[index].remindersSent = i
+                                self.saveSessions()
+                            }
+                        }
                     }
+                } else {
+                    NSLog("Skipping reminder \(i) for session \(session.id) - time already passed")
                 }
+            }
+        }
+    }
+
+    /// Re-schedule reminders for sessions that were persisted (e.g., after app restart)
+    func restoreReminders() {
+        for session in sessions where session.status == .completed {
+            guard let triggeredAt = session.alertTriggeredAt else { continue }
+
+            // Check if reminders should be enabled for this session
+            let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
+            let shouldRemind = session.reminderOverride ?? group?.reminderOverride ?? reminderEnabled
+
+            if shouldRemind {
+                NSLog("Restoring reminders for session \(session.id), originally triggered at \(triggeredAt)")
+                scheduleReminders(for: session, triggeredAt: triggeredAt)
             }
         }
     }

@@ -226,6 +226,40 @@ struct SessionRowView: View {
         .onTapGesture {
             viewModel.showSession(session)
         }
+        .contextMenu {
+            Menu("Move to Group") {
+                // Option to remove from group (ungrouped)
+                Button {
+                    viewModel.moveSession(session, toGroup: nil)
+                } label: {
+                    HStack {
+                        if session.groupId == nil {
+                            Image(systemName: "checkmark")
+                        }
+                        Text("None")
+                    }
+                }
+
+                Divider()
+
+                // List all available groups
+                ForEach(viewModel.sortedGroups, id: \.id) { group in
+                    Button {
+                        viewModel.moveSession(session, toGroup: group.id)
+                    } label: {
+                        HStack {
+                            if session.groupId == group.id {
+                                Image(systemName: "checkmark")
+                            }
+                            Circle()
+                                .fill(Color(hex: group.colorHex) ?? .gray)
+                                .frame(width: 8, height: 8)
+                            Text(group.name)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -554,11 +588,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     // Handle notification click or action button
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         if let sessionId = response.notification.request.content.userInfo["sessionId"] as? String {
-            // Handle both direct click and "Show" action button
+            NSLog("Notification action for session: \(sessionId), action: \(response.actionIdentifier)")
+
+            // Handle click, Show action, or dismiss - all acknowledge the session
             if response.actionIdentifier == UNNotificationDefaultActionIdentifier ||
                response.actionIdentifier == SessionManager.showActionId {
-                NSLog("Notification action for session: \(sessionId), action: \(response.actionIdentifier)")
+                // User clicked or tapped Show - navigate to session
                 sessionManager.navigateToSession(id: sessionId)
+                sessionManager.acknowledgeSession(id: sessionId)
+            } else if response.actionIdentifier == UNNotificationDismissActionIdentifier {
+                // User dismissed the notification - just acknowledge (cancel reminders)
                 sessionManager.acknowledgeSession(id: sessionId)
             }
         }
