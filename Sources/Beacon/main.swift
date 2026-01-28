@@ -398,7 +398,7 @@ struct SessionRowView: View {
                 Text("\(session.terminalInfo) · \(session.projectName)")
                     .font(.system(size: 12))
                     .lineLimit(1)
-                Text(viewModel.formatLastAlert(session))
+                Text(viewModel.formatLastAlert(session, tick: viewModel.tick))
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
@@ -611,8 +611,11 @@ struct SessionReorderDropDelegate: DropDelegate {
 class SessionsViewModel: ObservableObject {
     @Published var sessions: [ClaudeSession] = []
     @Published var groups: [SessionGroup] = []
+    @Published var tick: Int = 0
 
     private let sessionManager = SessionManager.shared
+    private var fastTimer: Timer?
+    private var slowTimer: Timer?
     weak var appDelegate: AppDelegate?
 
     init() {
@@ -622,6 +625,29 @@ class SessionsViewModel: ObservableObject {
                 self?.refresh()
             }
         }
+        // Fast timer (1s) for recent alerts
+        fastTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            // Only tick if there's a recent alert (within 1 min)
+            let hasRecentAlert = self.sessions.contains { session in
+                if let alertTime = session.alertTriggeredAt {
+                    return Date().timeIntervalSince(alertTime) < 60
+                }
+                return false
+            }
+            if hasRecentAlert {
+                self.tick += 1
+            }
+        }
+        // Slow timer (10s) for older alerts
+        slowTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            self?.tick += 1
+        }
+    }
+
+    deinit {
+        fastTimer?.invalidate()
+        slowTimer?.invalidate()
     }
 
     func refresh() {
@@ -653,19 +679,27 @@ class SessionsViewModel: ObservableObject {
             .sorted { $0.orderInGroup < $1.orderInGroup }
     }
 
-    func formatLastAlert(_ session: ClaudeSession) -> String {
+    func formatLastAlert(_ session: ClaudeSession, tick: Int = 0) -> String {
+        _ = tick  // Force refresh
         if let alertTime = session.alertTriggeredAt {
             let elapsed = Int(Date().timeIntervalSince(alertTime))
-            return "Last alert: \(formatElapsed(elapsed))"
+            return "Last alert: \(formatElapsed(elapsed, recent: elapsed < 60))"
         } else {
             let elapsed = Int(Date().timeIntervalSince(session.createdAt))
-            return "Started: \(formatElapsed(elapsed))"
+            return "Started: \(formatElapsed(elapsed, recent: false))"
         }
     }
 
-    func formatElapsed(_ seconds: Int) -> String {
-        if seconds < 60 {
+    func formatElapsed(_ seconds: Int, recent: Bool) -> String {
+        if recent {
+            // Show exact seconds for recent alerts
             return "\(seconds)s"
+        } else if seconds < 10 {
+            return "<10s"
+        } else if seconds < 30 {
+            return "<30s"
+        } else if seconds < 60 {
+            return "<1m"
         } else if seconds < 3600 {
             return "\(seconds / 60)m"
         } else {
