@@ -688,11 +688,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func updateIconBadge() {
-        let runningCount = sessionManager.sessions.filter { $0.status == .running }.count
+        // Show badge only for completed (unacknowledged) sessions that need attention
+        let unacknowledgedCount = sessionManager.sessions.filter { $0.status == .completed }.count
 
         if let button = statusItem.button {
-            if runningCount > 0 {
-                button.image = NSImage(systemSymbolName: "bell.badge.fill", accessibilityDescription: "Beacon - \(runningCount) running")
+            if unacknowledgedCount > 0 {
+                button.image = NSImage(systemSymbolName: "bell.badge.fill", accessibilityDescription: "Beacon - \(unacknowledgedCount) alerts")
             } else {
                 button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Beacon")
             }
