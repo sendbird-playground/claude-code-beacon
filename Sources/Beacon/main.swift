@@ -78,17 +78,13 @@ struct SessionsPopoverView: View {
                             }
                         }
 
-                        // Ungrouped sessions
-                        if !viewModel.ungroupedSessions.isEmpty {
+                        // Ungrouped sessions (always show when there are groups for drop target)
+                        if !viewModel.ungroupedSessions.isEmpty || !viewModel.sortedGroups.isEmpty {
                             UngroupedSectionView(
                                 sessions: viewModel.ungroupedSessions,
                                 viewModel: viewModel,
                                 draggingSession: $draggingSession
                             )
-                            .onDrop(of: [.text], delegate: UngroupedDropDelegate(
-                                viewModel: viewModel,
-                                draggingSession: $draggingSession
-                            ))
                         }
                     }
                     .padding(.vertical, 4)
@@ -166,23 +162,29 @@ struct UngroupedSectionView: View {
     let sessions: [ClaudeSession]
     @ObservedObject var viewModel: SessionsViewModel
     @Binding var draggingSession: ClaudeSession?
+    @State private var isTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header (only if there are grouped sessions too)
-            if viewModel.hasGroupedSessions {
+            // Header (show when there are groups)
+            if !viewModel.sortedGroups.isEmpty {
                 HStack(spacing: 4) {
                     Circle()
                         .strokeBorder(Color.secondary, lineWidth: 1)
                         .frame(width: 8, height: 8)
                     Text("Ungrouped")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.primary)
                     Spacer()
+                    if sessions.isEmpty {
+                        Text("Drop to ungroup")
+                            .font(.caption2)
+                            .foregroundColor(.secondary.opacity(0.6))
+                    }
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(Color.primary.opacity(0.05))
+                .padding(.vertical, 6)
+                .background(isTargeted ? Color.accentColor.opacity(0.2) : Color.clear)
             }
 
             ForEach(sessions, id: \.id) { session in
@@ -192,6 +194,22 @@ struct UngroupedSectionView: View {
                         return NSItemProvider(object: session.id as NSString)
                     }
             }
+
+            // Spacer area to make drop target larger when empty
+            if sessions.isEmpty && !viewModel.sortedGroups.isEmpty {
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(height: 30)
+            }
+        }
+        .background(isTargeted ? Color.accentColor.opacity(0.05) : Color.clear)
+        .onDrop(of: [.text], isTargeted: $isTargeted) { providers in
+            if let session = draggingSession, session.groupId != nil {
+                viewModel.moveSession(session, toGroup: nil)
+                draggingSession = nil
+                return true
+            }
+            return false
         }
     }
 }
@@ -310,23 +328,6 @@ struct GroupDropDelegate: DropDelegate {
     }
 }
 
-struct UngroupedDropDelegate: DropDelegate {
-    let viewModel: SessionsViewModel
-    @Binding var draggingSession: ClaudeSession?
-
-    func performDrop(info: DropInfo) -> Bool {
-        if let session = draggingSession {
-            viewModel.moveSession(session, toGroup: nil)
-            draggingSession = nil
-            return true
-        }
-        return false
-    }
-
-    func validateDrop(info: DropInfo) -> Bool {
-        return draggingSession != nil
-    }
-}
 
 // MARK: - ViewModel
 
