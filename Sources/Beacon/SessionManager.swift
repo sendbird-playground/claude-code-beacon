@@ -1571,6 +1571,7 @@ class SessionManager {
     }
 
     func sendCompletionNotification(for session: ClaudeSession) {
+        NSLog("sendCompletionNotification called for: \(session.projectName)")
         // Priority: session > group > global
         let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
 
@@ -1618,13 +1619,16 @@ class SessionManager {
         }
 
         // Play sound if enabled
+        NSLog("Sound check: shouldSound=\(shouldSound), soundEnabled=\(soundEnabled)")
         if shouldSound {
+            NSLog("Playing alert sound...")
             playAlertSound()
         }
 
         // Speak if enabled
         NSLog("Voice check: shouldVoice=\(shouldVoice), voiceEnabled=\(voiceEnabled)")
         if shouldVoice {
+            NSLog("Speaking summary for: \(session.projectName)")
             speakSummary(session)
         }
     }
@@ -1733,34 +1737,26 @@ class SessionManager {
         NSLog("Cancelled reminders for session \(sessionId)")
     }
 
-    private var speechTask: Process?
+    private var speechSynthesizer: NSSpeechSynthesizer?
 
     func speakSummary(_ session: ClaudeSession) {
         let textToSpeak = applyPronunciationRules(session.projectName)
         NSLog("Speaking: \(textToSpeak)")
 
-        // Must run on main thread for Process to work correctly
+        // Must run on main thread
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            // Cancel any ongoing speech
-            if let existing = self.speechTask, existing.isRunning {
-                existing.terminate()
+            // Stop any ongoing speech
+            self.speechSynthesizer?.stopSpeaking()
+
+            // Create synthesizer if needed
+            if self.speechSynthesizer == nil {
+                self.speechSynthesizer = NSSpeechSynthesizer()
             }
 
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-            task.arguments = [textToSpeak]
-
-            // Keep reference to prevent deallocation
-            self.speechTask = task
-
-            do {
-                try task.run()
-                NSLog("Speech task started successfully")
-            } catch {
-                NSLog("Failed to start speech: \(error)")
-            }
+            self.speechSynthesizer?.startSpeaking(textToSpeak)
+            NSLog("Speech started via NSSpeechSynthesizer")
         }
     }
 
@@ -1789,30 +1785,14 @@ class SessionManager {
         cancelReminders(for: sessionId)
     }
 
-    private var soundTask: Process?
-
     func playAlertSound() {
-        // Must run on main thread for Process to work correctly
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
-            // Cancel any ongoing sound
-            if let existing = self.soundTask, existing.isRunning {
-                existing.terminate()
-            }
-
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
-            task.arguments = ["/System/Library/Sounds/Glass.aiff"]
-
-            // Keep reference to prevent deallocation
-            self.soundTask = task
-
-            do {
-                try task.run()
-                NSLog("Sound task started successfully")
-            } catch {
-                NSLog("Failed to play sound: \(error)")
+        NSLog("Playing alert sound...")
+        DispatchQueue.main.async {
+            if let sound = NSSound(named: "Glass") {
+                sound.play()
+                NSLog("Sound played via NSSound")
+            } else {
+                NSLog("Failed to load Glass sound")
             }
         }
     }
