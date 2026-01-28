@@ -864,7 +864,13 @@ struct SettingsView: View {
                     PronunciationRuleRow(
                         pattern: pattern,
                         pronunciation: pronunciationRules[pattern] ?? "",
-                        onUpdate: { newPronunciation in
+                        onUpdatePattern: { newPattern in
+                            let oldPronunciation = pronunciationRules[pattern] ?? ""
+                            sessionManager.removePronunciationRule(pattern: pattern)
+                            sessionManager.addPronunciationRule(pattern: newPattern, pronunciation: oldPronunciation)
+                            pronunciationRules = sessionManager.pronunciationRules
+                        },
+                        onUpdatePronunciation: { newPronunciation in
                             sessionManager.addPronunciationRule(pattern: pattern, pronunciation: newPronunciation)
                             pronunciationRules = sessionManager.pronunciationRules
                         },
@@ -944,31 +950,58 @@ struct SettingsView: View {
 struct PronunciationRuleRow: View {
     let pattern: String
     let pronunciation: String
-    let onUpdate: (String) -> Void
+    let onUpdatePattern: (String) -> Void
+    let onUpdatePronunciation: (String) -> Void
     let onDelete: () -> Void
 
-    @State private var isEditing = false
+    @State private var isEditingPattern = false
+    @State private var isEditingPronunciation = false
+    @State private var editedPattern = ""
     @State private var editedPronunciation = ""
-    @FocusState private var isFocused: Bool
+    @FocusState private var patternFocused: Bool
+    @FocusState private var pronunciationFocused: Bool
 
     var body: some View {
         HStack {
-            Text(pattern)
-                .fontWeight(.medium)
+            if isEditingPattern {
+                TextField("Pattern", text: $editedPattern)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 100)
+                    .focused($patternFocused)
+                    .onSubmit {
+                        savePattern()
+                    }
+                    .onChange(of: patternFocused) { focused in
+                        if !focused {
+                            savePattern()
+                        }
+                    }
+            } else {
+                Text(pattern)
+                    .fontWeight(.medium)
+                    .onTapGesture {
+                        editedPattern = pattern
+                        isEditingPattern = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            patternFocused = true
+                        }
+                    }
+            }
+
             Image(systemName: "arrow.right")
                 .foregroundColor(.secondary)
 
-            if isEditing {
+            if isEditingPronunciation {
                 TextField("Pronunciation", text: $editedPronunciation)
                     .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 120)
-                    .focused($isFocused)
+                    .frame(maxWidth: 100)
+                    .focused($pronunciationFocused)
                     .onSubmit {
-                        saveAndClose()
+                        savePronunciation()
                     }
-                    .onChange(of: isFocused) { focused in
+                    .onChange(of: pronunciationFocused) { focused in
                         if !focused {
-                            saveAndClose()
+                            savePronunciation()
                         }
                     }
             } else {
@@ -976,9 +1009,9 @@ struct PronunciationRuleRow: View {
                     .foregroundColor(.secondary)
                     .onTapGesture {
                         editedPronunciation = pronunciation
-                        isEditing = true
+                        isEditingPronunciation = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            isFocused = true
+                            pronunciationFocused = true
                         }
                     }
             }
@@ -993,11 +1026,18 @@ struct PronunciationRuleRow: View {
         }
     }
 
-    private func saveAndClose() {
-        if !editedPronunciation.isEmpty && editedPronunciation != pronunciation {
-            onUpdate(editedPronunciation)
+    private func savePattern() {
+        if !editedPattern.isEmpty && editedPattern != pattern {
+            onUpdatePattern(editedPattern)
         }
-        isEditing = false
+        isEditingPattern = false
+    }
+
+    private func savePronunciation() {
+        if !editedPronunciation.isEmpty && editedPronunciation != pronunciation {
+            onUpdatePronunciation(editedPronunciation)
+        }
+        isEditingPronunciation = false
     }
 }
 
