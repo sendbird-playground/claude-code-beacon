@@ -1784,11 +1784,27 @@ class SessionManager {
         cancelReminders(for: sessionId)
     }
 
+    private var soundTask: Process?
+
     func playAlertSound() {
+        // Cancel any ongoing sound
+        if let existing = soundTask, existing.isRunning {
+            existing.terminate()
+        }
+
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
         task.arguments = ["/System/Library/Sounds/Glass.aiff"]
-        try? task.run()
+
+        // Keep reference to prevent deallocation
+        soundTask = task
+
+        do {
+            try task.run()
+            NSLog("Sound task started successfully")
+        } catch {
+            NSLog("Failed to play sound: \(error)")
+        }
     }
 
 
