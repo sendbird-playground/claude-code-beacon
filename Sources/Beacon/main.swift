@@ -1,6 +1,24 @@
 import AppKit
 import UserNotifications
 
+// MARK: - Color Helpers
+
+extension NSColor {
+    convenience init?(hex: String) {
+        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
+
+        var rgb: UInt64 = 0
+        guard Scanner(string: hexSanitized).scanHexInt64(&rgb) else { return nil }
+
+        let red = CGFloat((rgb & 0xFF0000) >> 16) / 255.0
+        let green = CGFloat((rgb & 0x00FF00) >> 8) / 255.0
+        let blue = CGFloat(rgb & 0x0000FF) / 255.0
+
+        self.init(red: red, green: green, blue: blue, alpha: 1.0)
+    }
+}
+
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
@@ -307,6 +325,105 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         reminderCountItem.submenu = reminderCountSubmenu
         settingsSubmenu.addItem(reminderCountItem)
 
+        settingsSubmenu.addItem(NSMenuItem.separator())
+
+        // Groups management
+        let groupsHeader = NSMenuItem(title: "Groups", action: nil, keyEquivalent: "")
+        groupsHeader.isEnabled = false
+        settingsSubmenu.addItem(groupsHeader)
+
+        // List existing groups with edit options
+        if sessionManager.groups.isEmpty {
+            let noGroupsItem = NSMenuItem(title: "No groups defined", action: nil, keyEquivalent: "")
+            noGroupsItem.isEnabled = false
+            settingsSubmenu.addItem(noGroupsItem)
+        } else {
+            for group in sessionManager.groups.sorted(by: { $0.order < $1.order }) {
+                let groupMenuItem = NSMenuItem(title: "● \(group.name)", action: nil, keyEquivalent: "")
+                if let color = NSColor(hex: group.colorHex) {
+                    groupMenuItem.attributedTitle = createColoredTitle("● \(group.name)", color: color)
+                }
+
+                let groupEditSubmenu = NSMenu()
+
+                // Group alerts submenu
+                let groupAlertsItem = NSMenuItem(title: "Alerts", action: nil, keyEquivalent: "")
+                let groupAlertsSubmenu = NSMenu()
+
+                groupAlertsSubmenu.addItem(createGroupAlertToggleItem(
+                    label: "Notification",
+                    groupId: group.id,
+                    currentOverride: group.notificationOverride,
+                    globalValue: sessionManager.notificationEnabled,
+                    action: #selector(setGroupNotification(_:))
+                ))
+
+                groupAlertsSubmenu.addItem(createGroupAlertToggleItem(
+                    label: "Sound",
+                    groupId: group.id,
+                    currentOverride: group.soundOverride,
+                    globalValue: sessionManager.soundEnabled,
+                    action: #selector(setGroupSound(_:))
+                ))
+
+                groupAlertsSubmenu.addItem(createGroupAlertToggleItem(
+                    label: "Voice",
+                    groupId: group.id,
+                    currentOverride: group.voiceOverride,
+                    globalValue: sessionManager.voiceEnabled,
+                    action: #selector(setGroupVoice(_:))
+                ))
+
+                groupAlertsSubmenu.addItem(createGroupAlertToggleItem(
+                    label: "Reminder",
+                    groupId: group.id,
+                    currentOverride: group.reminderOverride,
+                    globalValue: sessionManager.reminderEnabled,
+                    action: #selector(setGroupReminder(_:))
+                ))
+
+                groupAlertsItem.submenu = groupAlertsSubmenu
+                groupEditSubmenu.addItem(groupAlertsItem)
+
+                // Color submenu
+                let colorItem = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
+                let colorSubmenu = NSMenu()
+                for (colorName, colorHex) in SessionGroup.availableColors {
+                    let colorOption = NSMenuItem(title: "● \(colorName)", action: #selector(setGroupColor(_:)), keyEquivalent: "")
+                    colorOption.target = self
+                    colorOption.representedObject = ["groupId": group.id, "colorHex": colorHex]
+                    if let color = NSColor(hex: colorHex) {
+                        colorOption.attributedTitle = createColoredTitle("● \(colorName)", color: color)
+                    }
+                    if group.colorHex == colorHex {
+                        colorOption.state = .on
+                    }
+                    colorSubmenu.addItem(colorOption)
+                }
+                colorItem.submenu = colorSubmenu
+                groupEditSubmenu.addItem(colorItem)
+
+                groupEditSubmenu.addItem(NSMenuItem.separator())
+
+                let renameItem = NSMenuItem(title: "Rename...", action: #selector(renameGroup(_:)), keyEquivalent: "")
+                renameItem.target = self
+                renameItem.representedObject = group.id
+                groupEditSubmenu.addItem(renameItem)
+
+                let deleteItem = NSMenuItem(title: "Delete", action: #selector(deleteGroup(_:)), keyEquivalent: "")
+                deleteItem.target = self
+                deleteItem.representedObject = group.id
+                groupEditSubmenu.addItem(deleteItem)
+
+                groupMenuItem.submenu = groupEditSubmenu
+                settingsSubmenu.addItem(groupMenuItem)
+            }
+        }
+
+        let addGroupItem = NSMenuItem(title: "Add Group...", action: #selector(addGroup), keyEquivalent: "")
+        addGroupItem.target = self
+        settingsSubmenu.addItem(addGroupItem)
+
         settingsItem.submenu = settingsSubmenu
         menu.addItem(settingsItem)
 
@@ -353,6 +470,85 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         } else {
             return "\(elapsed / 3600)h"
         }
+    }
+
+    func createColoredTitle(_ text: String, color: NSColor) -> NSAttributedString {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: color
+        ]
+        // Color only the bullet
+        let attributedString = NSMutableAttributedString(string: text)
+        if let bulletRange = text.range(of: "●") {
+            let nsRange = NSRange(bulletRange, in: text)
+            attributedString.addAttributes(attributes, range: nsRange)
+        }
+        return attributedString
+    }
+
+    func createAlertToggleItem(label: String, sessionId: String, currentOverride: Bool?, globalValue: Bool, action: Selector) -> NSMenuItem {
+        let toggleItem = NSMenuItem(title: label, action: nil, keyEquivalent: "")
+        let toggleSubmenu = NSMenu()
+
+        let globalLabel = globalValue ? "Global (On)" : "Global (Off)"
+        let globalItem = NSMenuItem(title: globalLabel, action: action, keyEquivalent: "")
+        globalItem.target = self
+        globalItem.representedObject = ["sessionId": sessionId, "value": NSNull()]
+        if currentOverride == nil {
+            globalItem.state = .on
+        }
+        toggleSubmenu.addItem(globalItem)
+
+        let onItem = NSMenuItem(title: "On", action: action, keyEquivalent: "")
+        onItem.target = self
+        onItem.representedObject = ["sessionId": sessionId, "value": true]
+        if currentOverride == true {
+            onItem.state = .on
+        }
+        toggleSubmenu.addItem(onItem)
+
+        let offItem = NSMenuItem(title: "Off", action: action, keyEquivalent: "")
+        offItem.target = self
+        offItem.representedObject = ["sessionId": sessionId, "value": false]
+        if currentOverride == false {
+            offItem.state = .on
+        }
+        toggleSubmenu.addItem(offItem)
+
+        toggleItem.submenu = toggleSubmenu
+        return toggleItem
+    }
+
+    func createGroupAlertToggleItem(label: String, groupId: String, currentOverride: Bool?, globalValue: Bool, action: Selector) -> NSMenuItem {
+        let toggleItem = NSMenuItem(title: label, action: nil, keyEquivalent: "")
+        let toggleSubmenu = NSMenu()
+
+        let globalLabel = globalValue ? "Global (On)" : "Global (Off)"
+        let globalItem = NSMenuItem(title: globalLabel, action: action, keyEquivalent: "")
+        globalItem.target = self
+        globalItem.representedObject = ["groupId": groupId, "value": NSNull()]
+        if currentOverride == nil {
+            globalItem.state = .on
+        }
+        toggleSubmenu.addItem(globalItem)
+
+        let onItem = NSMenuItem(title: "On", action: action, keyEquivalent: "")
+        onItem.target = self
+        onItem.representedObject = ["groupId": groupId, "value": true]
+        if currentOverride == true {
+            onItem.state = .on
+        }
+        toggleSubmenu.addItem(onItem)
+
+        let offItem = NSMenuItem(title: "Off", action: action, keyEquivalent: "")
+        offItem.target = self
+        offItem.representedObject = ["groupId": groupId, "value": false]
+        if currentOverride == false {
+            offItem.state = .on
+        }
+        toggleSubmenu.addItem(offItem)
+
+        toggleItem.submenu = toggleSubmenu
+        return toggleItem
     }
 
     func createSessionMenuItem(_ session: ClaudeSession, suffix: String = "") -> NSMenuItem {
@@ -410,6 +606,80 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             killItem.representedObject = session.id
             submenu.addItem(killItem)
         }
+
+        submenu.addItem(NSMenuItem.separator())
+
+        // Session-specific settings submenu
+        let sessionSettingsItem = NSMenuItem(title: "Session Alerts", action: nil, keyEquivalent: "")
+        let sessionSettingsSubmenu = NSMenu()
+
+        sessionSettingsSubmenu.addItem(createAlertToggleItem(
+            label: "Notification",
+            sessionId: session.id,
+            currentOverride: session.notificationOverride,
+            globalValue: sessionManager.notificationEnabled,
+            action: #selector(setSessionNotification(_:))
+        ))
+
+        sessionSettingsSubmenu.addItem(createAlertToggleItem(
+            label: "Sound",
+            sessionId: session.id,
+            currentOverride: session.soundOverride,
+            globalValue: sessionManager.soundEnabled,
+            action: #selector(setSessionSound(_:))
+        ))
+
+        sessionSettingsSubmenu.addItem(createAlertToggleItem(
+            label: "Voice",
+            sessionId: session.id,
+            currentOverride: session.voiceOverride,
+            globalValue: sessionManager.voiceEnabled,
+            action: #selector(setSessionVoice(_:))
+        ))
+
+        sessionSettingsSubmenu.addItem(createAlertToggleItem(
+            label: "Reminder",
+            sessionId: session.id,
+            currentOverride: session.reminderOverride,
+            globalValue: sessionManager.reminderEnabled,
+            action: #selector(setSessionReminder(_:))
+        ))
+
+        sessionSettingsItem.submenu = sessionSettingsSubmenu
+        submenu.addItem(sessionSettingsItem)
+
+        // Group assignment submenu
+        let groupItem = NSMenuItem(title: "Group", action: nil, keyEquivalent: "")
+        let groupSubmenu = NSMenu()
+
+        // No Group option
+        let noGroupItem = NSMenuItem(title: "None", action: #selector(setSessionGroupAction(_:)), keyEquivalent: "")
+        noGroupItem.target = self
+        noGroupItem.representedObject = ["sessionId": session.id, "groupId": NSNull()]
+        if session.groupId == nil {
+            noGroupItem.state = .on
+        }
+        groupSubmenu.addItem(noGroupItem)
+
+        // Existing groups
+        if !sessionManager.groups.isEmpty {
+            groupSubmenu.addItem(NSMenuItem.separator())
+            for group in sessionManager.groups.sorted(by: { $0.order < $1.order }) {
+                let groupMenuItem = NSMenuItem(title: "● \(group.name)", action: #selector(setSessionGroupAction(_:)), keyEquivalent: "")
+                groupMenuItem.target = self
+                groupMenuItem.representedObject = ["sessionId": session.id, "groupId": group.id]
+                if let color = NSColor(hex: group.colorHex) {
+                    groupMenuItem.attributedTitle = createColoredTitle("● \(group.name)", color: color)
+                }
+                if session.groupId == group.id {
+                    groupMenuItem.state = .on
+                }
+                groupSubmenu.addItem(groupMenuItem)
+            }
+        }
+
+        groupItem.submenu = groupSubmenu
+        submenu.addItem(groupItem)
 
         submenu.addItem(NSMenuItem.separator())
 
@@ -538,6 +808,160 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         guard let count = sender.representedObject as? Int else { return }
         sessionManager.reminderCount = count
         updateMenu()
+    }
+
+    // MARK: - Session-Specific Settings Actions
+
+    @objc func setSessionNotification(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let sessionId = info["sessionId"] as? String else { return }
+        let value = info["value"] as? Bool  // nil if NSNull
+        sessionManager.setSessionNotificationOverride(id: sessionId, enabled: value)
+    }
+
+    @objc func setSessionSound(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let sessionId = info["sessionId"] as? String else { return }
+        let value = info["value"] as? Bool
+        sessionManager.setSessionSoundOverride(id: sessionId, enabled: value)
+    }
+
+    @objc func setSessionVoice(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let sessionId = info["sessionId"] as? String else { return }
+        let value = info["value"] as? Bool
+        sessionManager.setSessionVoiceOverride(id: sessionId, enabled: value)
+    }
+
+    @objc func setSessionReminder(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let sessionId = info["sessionId"] as? String else { return }
+        let value = info["value"] as? Bool
+        sessionManager.setSessionReminderOverride(id: sessionId, enabled: value)
+    }
+
+    @objc func setSessionGroupAction(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let sessionId = info["sessionId"] as? String else { return }
+        let groupId = info["groupId"] as? String  // nil if NSNull
+        sessionManager.setSessionGroup(sessionId: sessionId, groupId: groupId)
+    }
+
+    // MARK: - Group Actions
+
+    @objc func addGroup() {
+        let alert = NSAlert()
+        alert.messageText = "Create New Group"
+        alert.informativeText = "Enter a name for the new group."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+
+        let stackView = NSStackView(frame: NSRect(x: 0, y: 0, width: 300, height: 80))
+        stackView.orientation = .vertical
+        stackView.spacing = 8
+
+        let nameField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        nameField.placeholderString = "Group name"
+        stackView.addArrangedSubview(nameField)
+
+        // Color selector
+        let colorPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        for (colorName, colorHex) in SessionGroup.availableColors {
+            let item = NSMenuItem(title: colorName, action: nil, keyEquivalent: "")
+            item.representedObject = colorHex
+            colorPopup.menu?.addItem(item)
+        }
+        stackView.addArrangedSubview(colorPopup)
+
+        alert.accessoryView = stackView
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            let name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
+            let colorHex = colorPopup.selectedItem?.representedObject as? String ?? "#808080"
+
+            if !name.isEmpty {
+                _ = sessionManager.createGroup(name: name, colorHex: colorHex)
+                updateMenu()
+            }
+        }
+    }
+
+    @objc func renameGroup(_ sender: NSMenuItem) {
+        guard let groupId = sender.representedObject as? String,
+              let group = sessionManager.groups.first(where: { $0.id == groupId }) else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Rename Group"
+        alert.informativeText = "Enter a new name for \"\(group.name)\"."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let nameField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        nameField.stringValue = group.name
+        alert.accessoryView = nameField
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            let newName = nameField.stringValue.trimmingCharacters(in: .whitespaces)
+            if !newName.isEmpty {
+                sessionManager.updateGroup(id: groupId, name: newName)
+                updateMenu()
+            }
+        }
+    }
+
+    @objc func deleteGroup(_ sender: NSMenuItem) {
+        guard let groupId = sender.representedObject as? String,
+              let group = sessionManager.groups.first(where: { $0.id == groupId }) else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Delete Group"
+        alert.informativeText = "Are you sure you want to delete \"\(group.name)\"? Sessions in this group will become ungrouped."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            sessionManager.deleteGroup(id: groupId)
+            updateMenu()
+        }
+    }
+
+    @objc func setGroupColor(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let groupId = info["groupId"] as? String,
+              let colorHex = info["colorHex"] as? String else { return }
+        sessionManager.updateGroup(id: groupId, colorHex: colorHex)
+        updateMenu()
+    }
+
+    @objc func setGroupNotification(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let groupId = info["groupId"] as? String else { return }
+        let value = info["value"] as? Bool
+        sessionManager.setGroupNotificationOverride(id: groupId, enabled: value)
+    }
+
+    @objc func setGroupSound(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let groupId = info["groupId"] as? String else { return }
+        let value = info["value"] as? Bool
+        sessionManager.setGroupSoundOverride(id: groupId, enabled: value)
+    }
+
+    @objc func setGroupVoice(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let groupId = info["groupId"] as? String else { return }
+        let value = info["value"] as? Bool
+        sessionManager.setGroupVoiceOverride(id: groupId, enabled: value)
+    }
+
+    @objc func setGroupReminder(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let groupId = info["groupId"] as? String else { return }
+        let value = info["value"] as? Bool
+        sessionManager.setGroupReminderOverride(id: groupId, enabled: value)
     }
 
     private let expandCollapseTag = 9999

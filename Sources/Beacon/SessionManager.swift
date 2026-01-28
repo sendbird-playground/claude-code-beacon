@@ -11,6 +11,54 @@ enum SessionStatus: String, Codable {
     case acknowledged = "acknowledged"
 }
 
+// MARK: - Session Group
+
+struct SessionGroup: Identifiable, Codable {
+    let id: String
+    var name: String
+    var colorHex: String  // Hex color string (e.g., "#FF5733")
+    var order: Int
+
+    // Group-level settings overrides (nil = use global setting)
+    var notificationOverride: Bool?
+    var soundOverride: Bool?
+    var voiceOverride: Bool?
+    var reminderOverride: Bool?
+
+    init(
+        id: String = UUID().uuidString,
+        name: String,
+        colorHex: String = "#808080",
+        order: Int = 0,
+        notificationOverride: Bool? = nil,
+        soundOverride: Bool? = nil,
+        voiceOverride: Bool? = nil,
+        reminderOverride: Bool? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.colorHex = colorHex
+        self.order = order
+        self.notificationOverride = notificationOverride
+        self.soundOverride = soundOverride
+        self.voiceOverride = voiceOverride
+        self.reminderOverride = reminderOverride
+    }
+
+    // Predefined colors for easy selection
+    static let availableColors: [(name: String, hex: String)] = [
+        ("Red", "#FF3B30"),
+        ("Orange", "#FF9500"),
+        ("Yellow", "#FFCC00"),
+        ("Green", "#34C759"),
+        ("Teal", "#5AC8FA"),
+        ("Blue", "#007AFF"),
+        ("Purple", "#AF52DE"),
+        ("Pink", "#FF2D55"),
+        ("Gray", "#8E8E93")
+    ]
+}
+
 
 struct ClaudeSession: Identifiable, Codable {
     let id: String
@@ -31,6 +79,15 @@ struct ClaudeSession: Identifiable, Codable {
     var ttyName: String?      // TTY name for Terminal.app
     var pycharmWindow: String? // PyCharm window/project name
 
+    // Per-session settings overrides (nil = use global setting)
+    var notificationOverride: Bool?
+    var soundOverride: Bool?
+    var voiceOverride: Bool?
+    var reminderOverride: Bool?
+
+    // Group assignment (nil = ungrouped)
+    var groupId: String?
+
     init(
         id: String = UUID().uuidString,
         projectName: String,
@@ -46,7 +103,12 @@ struct ClaudeSession: Identifiable, Codable {
         tag: String? = nil,
         weztermPane: String? = nil,
         ttyName: String? = nil,
-        pycharmWindow: String? = nil
+        pycharmWindow: String? = nil,
+        notificationOverride: Bool? = nil,
+        soundOverride: Bool? = nil,
+        voiceOverride: Bool? = nil,
+        reminderOverride: Bool? = nil,
+        groupId: String? = nil
     ) {
         self.id = id
         self.projectName = projectName
@@ -63,6 +125,11 @@ struct ClaudeSession: Identifiable, Codable {
         self.weztermPane = weztermPane
         self.ttyName = ttyName
         self.pycharmWindow = pycharmWindow
+        self.notificationOverride = notificationOverride
+        self.soundOverride = soundOverride
+        self.voiceOverride = voiceOverride
+        self.reminderOverride = reminderOverride
+        self.groupId = groupId
     }
 
 
@@ -78,11 +145,13 @@ class SessionManager {
     static let shared = SessionManager()
 
     var sessions: [ClaudeSession] = []
+    var groups: [SessionGroup] = []
     var onSessionsChanged: (() -> Void)?
 
     private var monitorTimer: Timer?
     private var appActivationObserver: Any?
     private let storageURL: URL
+    private let groupsURL: URL
 
     private var knownPids: Set<Int32> = []
     private var ignoredPids: Set<Int32> = []  // PIDs to ignore (user marked as complete)
@@ -138,8 +207,10 @@ class SessionManager {
         try? FileManager.default.createDirectory(at: beaconDir, withIntermediateDirectories: true)
         storageURL = beaconDir.appendingPathComponent("sessions.json")
         settingsURL = beaconDir.appendingPathComponent("settings.json")
+        groupsURL = beaconDir.appendingPathComponent("groups.json")
 
         loadSessions()
+        loadGroups()
         loadSettings()
         registerNotificationCategories()
         requestNotificationPermission()
@@ -1185,6 +1256,156 @@ class SessionManager {
         }
     }
 
+    // MARK: - Per-Session Settings
+
+    func setSessionNotificationOverride(id: String, enabled: Bool?) {
+        if let index = sessions.firstIndex(where: { $0.id == id }) {
+            sessions[index].notificationOverride = enabled
+            saveSessions()
+            onSessionsChanged?()
+        }
+    }
+
+    func setSessionSoundOverride(id: String, enabled: Bool?) {
+        if let index = sessions.firstIndex(where: { $0.id == id }) {
+            sessions[index].soundOverride = enabled
+            saveSessions()
+            onSessionsChanged?()
+        }
+    }
+
+    func setSessionVoiceOverride(id: String, enabled: Bool?) {
+        if let index = sessions.firstIndex(where: { $0.id == id }) {
+            sessions[index].voiceOverride = enabled
+            saveSessions()
+            onSessionsChanged?()
+        }
+    }
+
+    func setSessionReminderOverride(id: String, enabled: Bool?) {
+        if let index = sessions.firstIndex(where: { $0.id == id }) {
+            sessions[index].reminderOverride = enabled
+            saveSessions()
+            onSessionsChanged?()
+        }
+    }
+
+    func getEffectiveNotification(for session: ClaudeSession) -> Bool {
+        let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
+        return session.notificationOverride ?? group?.notificationOverride ?? notificationEnabled
+    }
+
+    func getEffectiveSound(for session: ClaudeSession) -> Bool {
+        let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
+        return session.soundOverride ?? group?.soundOverride ?? soundEnabled
+    }
+
+    func getEffectiveVoice(for session: ClaudeSession) -> Bool {
+        let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
+        return session.voiceOverride ?? group?.voiceOverride ?? voiceEnabled
+    }
+
+    func getEffectiveReminder(for session: ClaudeSession) -> Bool {
+        let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
+        return session.reminderOverride ?? group?.reminderOverride ?? reminderEnabled
+    }
+
+    func setSessionGroup(sessionId: String, groupId: String?) {
+        if let index = sessions.firstIndex(where: { $0.id == sessionId }) {
+            sessions[index].groupId = groupId
+            saveSessions()
+            onSessionsChanged?()
+        }
+    }
+
+    // MARK: - Group Management
+
+    func createGroup(name: String, colorHex: String) -> SessionGroup {
+        let order = (groups.map { $0.order }.max() ?? -1) + 1
+        let group = SessionGroup(name: name, colorHex: colorHex, order: order)
+        groups.append(group)
+        saveGroups()
+        onSessionsChanged?()
+        return group
+    }
+
+    func updateGroup(id: String, name: String? = nil, colorHex: String? = nil, order: Int? = nil) {
+        if let index = groups.firstIndex(where: { $0.id == id }) {
+            if let name = name { groups[index].name = name }
+            if let colorHex = colorHex { groups[index].colorHex = colorHex }
+            if let order = order { groups[index].order = order }
+            saveGroups()
+            onSessionsChanged?()
+        }
+    }
+
+    func deleteGroup(id: String) {
+        // Remove group from sessions
+        for i in sessions.indices where sessions[i].groupId == id {
+            sessions[i].groupId = nil
+        }
+        saveSessions()
+
+        groups.removeAll { $0.id == id }
+        saveGroups()
+        onSessionsChanged?()
+    }
+
+    func setGroupNotificationOverride(id: String, enabled: Bool?) {
+        if let index = groups.firstIndex(where: { $0.id == id }) {
+            groups[index].notificationOverride = enabled
+            saveGroups()
+            onSessionsChanged?()
+        }
+    }
+
+    func setGroupSoundOverride(id: String, enabled: Bool?) {
+        if let index = groups.firstIndex(where: { $0.id == id }) {
+            groups[index].soundOverride = enabled
+            saveGroups()
+            onSessionsChanged?()
+        }
+    }
+
+    func setGroupVoiceOverride(id: String, enabled: Bool?) {
+        if let index = groups.firstIndex(where: { $0.id == id }) {
+            groups[index].voiceOverride = enabled
+            saveGroups()
+            onSessionsChanged?()
+        }
+    }
+
+    func setGroupReminderOverride(id: String, enabled: Bool?) {
+        if let index = groups.firstIndex(where: { $0.id == id }) {
+            groups[index].reminderOverride = enabled
+            saveGroups()
+            onSessionsChanged?()
+        }
+    }
+
+    func getGroupedSessions() -> [(group: SessionGroup?, sessions: [ClaudeSession])] {
+        // Sort groups by order
+        let sortedGroups = groups.sorted { $0.order < $1.order }
+
+        var result: [(group: SessionGroup?, sessions: [ClaudeSession])] = []
+
+        // Add grouped sessions first
+        for group in sortedGroups {
+            let groupSessions = sessions.filter { $0.groupId == group.id }
+            if !groupSessions.isEmpty {
+                result.append((group: group, sessions: groupSessions))
+            }
+        }
+
+        // Add ungrouped sessions
+        let ungroupedSessions = sessions.filter { $0.groupId == nil }
+        if !ungroupedSessions.isEmpty {
+            result.append((group: nil, sessions: ungroupedSessions))
+        }
+
+        return result
+    }
+
     func killSession(id: String) {
         if let index = sessions.firstIndex(where: { $0.id == id }),
            let pid = sessions[index].pid {
@@ -1244,8 +1465,16 @@ class SessionManager {
     }
 
     func sendCompletionNotification(for session: ClaudeSession) {
+        // Priority: session > group > global
+        let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
+
+        let shouldNotify = session.notificationOverride ?? group?.notificationOverride ?? notificationEnabled
+        let shouldSound = session.soundOverride ?? group?.soundOverride ?? soundEnabled
+        let shouldVoice = session.voiceOverride ?? group?.voiceOverride ?? voiceEnabled
+        let shouldRemind = session.reminderOverride ?? group?.reminderOverride ?? reminderEnabled
+
         // Send macOS notification if enabled
-        if notificationEnabled {
+        if shouldNotify {
             let content = UNMutableNotificationContent()
             content.title = "Claude Task Completed"
             content.body = "\(session.terminalInfo) · \(session.projectName)"
@@ -1269,18 +1498,18 @@ class SessionManager {
             }
 
             // Schedule reminders if enabled
-            if reminderEnabled {
+            if shouldRemind {
                 scheduleReminders(for: session)
             }
         }
 
         // Play sound if enabled
-        if soundEnabled {
+        if shouldSound {
             playAlertSound()
         }
 
         // Speak if enabled
-        if voiceEnabled {
+        if shouldVoice {
             speakSummary(session)
         }
     }
@@ -1421,6 +1650,28 @@ class SessionManager {
             }
         } catch {
             print("Failed to load sessions: \(error)")
+        }
+    }
+
+    func saveGroups() {
+        do {
+            let encoder = JSONEncoder()
+            let data = try encoder.encode(groups)
+            try data.write(to: groupsURL, options: .atomic)
+        } catch {
+            print("Failed to save groups: \(error)")
+        }
+    }
+
+    func loadGroups() {
+        guard FileManager.default.fileExists(atPath: groupsURL.path) else { return }
+
+        do {
+            let data = try Data(contentsOf: groupsURL)
+            let decoder = JSONDecoder()
+            groups = try decoder.decode([SessionGroup].self, from: data)
+        } catch {
+            print("Failed to load groups: \(error)")
         }
     }
 
