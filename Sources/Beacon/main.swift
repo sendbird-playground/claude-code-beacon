@@ -398,8 +398,7 @@ struct SessionRowView: View {
                 Text("\(session.terminalInfo) · \(session.projectName)")
                     .font(.system(size: 12))
                     .lineLimit(1)
-                // tick triggers re-render to update elapsed time
-                Text(viewModel.formatElapsedTime(session.createdAt, tick: viewModel.tick))
+                Text(viewModel.formatLastAlert(session))
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
@@ -612,10 +611,8 @@ struct SessionReorderDropDelegate: DropDelegate {
 class SessionsViewModel: ObservableObject {
     @Published var sessions: [ClaudeSession] = []
     @Published var groups: [SessionGroup] = []
-    @Published var tick: Int = 0  // Used to trigger time updates
 
     private let sessionManager = SessionManager.shared
-    private var timer: Timer?
     weak var appDelegate: AppDelegate?
 
     init() {
@@ -625,14 +622,6 @@ class SessionsViewModel: ObservableObject {
                 self?.refresh()
             }
         }
-        // Timer to update elapsed time every 10 seconds
-        timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            self?.tick += 1
-        }
-    }
-
-    deinit {
-        timer?.invalidate()
     }
 
     func refresh() {
@@ -664,16 +653,15 @@ class SessionsViewModel: ObservableObject {
             .sorted { $0.orderInGroup < $1.orderInGroup }
     }
 
-    func formatElapsedTime(_ date: Date, tick: Int = 0) -> String {
-        // tick parameter forces re-computation when timer fires
-        _ = tick
-        let elapsed = Int(Date().timeIntervalSince(date))
-        if elapsed < 60 {
-            return "\(elapsed)s"
-        } else if elapsed < 3600 {
-            return "\(elapsed / 60)m"
+    func formatLastAlert(_ session: ClaudeSession) -> String {
+        if let alertTime = session.alertTriggeredAt {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm"
+            return "Last alert: \(formatter.string(from: alertTime))"
         } else {
-            return "\(elapsed / 3600)h \(elapsed % 3600 / 60)m"
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm"
+            return "Started: \(formatter.string(from: session.createdAt))"
         }
     }
 
