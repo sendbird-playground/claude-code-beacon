@@ -400,6 +400,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                     }
                     colorSubmenu.addItem(colorOption)
                 }
+
+                colorSubmenu.addItem(NSMenuItem.separator())
+
+                // Custom color option
+                let customColorItem = NSMenuItem(title: "Custom...", action: #selector(setCustomGroupColor(_:)), keyEquivalent: "")
+                customColorItem.target = self
+                customColorItem.representedObject = group.id
+                // Check if current color is custom (not in predefined list)
+                let isCustomColor = !SessionGroup.availableColors.contains { $0.hex == group.colorHex }
+                if isCustomColor {
+                    // Show current custom color
+                    let currentColorItem = NSMenuItem(title: "● Current: \(group.colorHex)", action: nil, keyEquivalent: "")
+                    if let color = NSColor(hex: group.colorHex) {
+                        currentColorItem.attributedTitle = createColoredTitle("● Current: \(group.colorHex)", color: color)
+                    }
+                    currentColorItem.state = .on
+                    currentColorItem.isEnabled = false
+                    colorSubmenu.addItem(currentColorItem)
+                }
+                colorSubmenu.addItem(customColorItem)
+
                 colorItem.submenu = colorSubmenu
                 groupEditSubmenu.addItem(colorItem)
 
@@ -934,6 +955,43 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
               let colorHex = info["colorHex"] as? String else { return }
         sessionManager.updateGroup(id: groupId, colorHex: colorHex)
         updateMenu()
+    }
+
+    @objc func setCustomGroupColor(_ sender: NSMenuItem) {
+        guard let groupId = sender.representedObject as? String,
+              let group = sessionManager.groups.first(where: { $0.id == groupId }) else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Custom Color"
+        alert.informativeText = "Enter a HEX color code (e.g., #FF5733 or FF5733)."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Cancel")
+
+        let hexField = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+        hexField.stringValue = group.colorHex
+        hexField.placeholderString = "#RRGGBB"
+        alert.accessoryView = hexField
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            var hexInput = hexField.stringValue.trimmingCharacters(in: .whitespaces)
+            // Add # prefix if missing
+            if !hexInput.hasPrefix("#") {
+                hexInput = "#" + hexInput
+            }
+            // Validate hex color
+            if NSColor(hex: hexInput) != nil {
+                sessionManager.updateGroup(id: groupId, colorHex: hexInput.uppercased())
+                updateMenu()
+            } else {
+                let errorAlert = NSAlert()
+                errorAlert.messageText = "Invalid Color"
+                errorAlert.informativeText = "Please enter a valid HEX color code (e.g., #FF5733)."
+                errorAlert.alertStyle = .warning
+                errorAlert.addButton(withTitle: "OK")
+                errorAlert.runModal()
+            }
+        }
     }
 
     @objc func setGroupNotification(_ sender: NSMenuItem) {

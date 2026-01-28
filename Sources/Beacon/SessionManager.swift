@@ -45,17 +45,13 @@ struct SessionGroup: Identifiable, Codable {
         self.reminderOverride = reminderOverride
     }
 
-    // Predefined colors for easy selection
+    // Predefined pastel colors for easy selection
     static let availableColors: [(name: String, hex: String)] = [
-        ("Red", "#FF3B30"),
-        ("Orange", "#FF9500"),
-        ("Yellow", "#FFCC00"),
-        ("Green", "#34C759"),
-        ("Teal", "#5AC8FA"),
-        ("Blue", "#007AFF"),
-        ("Purple", "#AF52DE"),
-        ("Pink", "#FF2D55"),
-        ("Gray", "#8E8E93")
+        ("Rose", "#FFB3BA"),
+        ("Peach", "#FFDFBA"),
+        ("Mint", "#BAFFC9"),
+        ("Sky", "#BAE1FF"),
+        ("Lavender", "#E0BBE4")
     ]
 }
 
