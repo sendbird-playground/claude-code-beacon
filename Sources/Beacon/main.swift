@@ -89,7 +89,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         menu.addItem(headerItem)
         menu.addItem(NSMenuItem.separator())
 
-        // Only show running sessions
+        // Only show running sessions, grouped by their group
         let runningSessions = sessionManager.sessions.filter { $0.status == .running }
 
         if runningSessions.isEmpty {
@@ -97,30 +97,73 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             emptyItem.isEnabled = false
             menu.addItem(emptyItem)
         } else {
-            // Sort by creation time descending (newest first)
-            let sorted = runningSessions.sorted { $0.createdAt > $1.createdAt }
+            // Group sessions by their group
+            let sortedGroups = sessionManager.groups.sorted { $0.order < $1.order }
 
             // Track duplicates to add suffixes
             var nameCounts: [String: Int] = [:]
             var nameIndices: [String: Int] = [:]
 
-            // First pass: count occurrences
-            for session in sorted {
+            // First pass: count occurrences across all sessions
+            for session in runningSessions {
                 let key = "\(session.terminalInfo)|\(session.projectName)"
                 nameCounts[key, default: 0] += 1
             }
 
-            // Second pass: create menu items
-            for session in sorted {
-                let key = "\(session.terminalInfo)|\(session.projectName)"
-                let count = nameCounts[key] ?? 1
-                var suffix = ""
-                if count > 1 {
-                    nameIndices[key, default: 0] += 1
-                    suffix = " #\(nameIndices[key]!)"
+            // Show grouped sessions first
+            for group in sortedGroups {
+                let groupSessions = runningSessions
+                    .filter { $0.groupId == group.id }
+                    .sorted { $0.createdAt > $1.createdAt }
+
+                if !groupSessions.isEmpty {
+                    // Group header
+                    let headerItem = NSMenuItem(title: "● \(group.name)", action: nil, keyEquivalent: "")
+                    headerItem.isEnabled = false
+                    if let color = NSColor(hex: group.colorHex) {
+                        headerItem.attributedTitle = createColoredGroupHeader(group.name, color: color)
+                    }
+                    menu.addItem(headerItem)
+
+                    // Sessions in this group
+                    for session in groupSessions {
+                        let key = "\(session.terminalInfo)|\(session.projectName)"
+                        let count = nameCounts[key] ?? 1
+                        var suffix = ""
+                        if count > 1 {
+                            nameIndices[key, default: 0] += 1
+                            suffix = " #\(nameIndices[key]!)"
+                        }
+                        let item = createSessionMenuItem(session, suffix: suffix)
+                        menu.addItem(item)
+                    }
                 }
-                let item = createSessionMenuItem(session, suffix: suffix)
-                menu.addItem(item)
+            }
+
+            // Show ungrouped sessions
+            let ungroupedSessions = runningSessions
+                .filter { $0.groupId == nil }
+                .sorted { $0.createdAt > $1.createdAt }
+
+            if !ungroupedSessions.isEmpty {
+                // Only show header if there are also grouped sessions
+                if runningSessions.contains(where: { $0.groupId != nil }) {
+                    let ungroupedHeader = NSMenuItem(title: "○ Ungrouped", action: nil, keyEquivalent: "")
+                    ungroupedHeader.isEnabled = false
+                    menu.addItem(ungroupedHeader)
+                }
+
+                for session in ungroupedSessions {
+                    let key = "\(session.terminalInfo)|\(session.projectName)"
+                    let count = nameCounts[key] ?? 1
+                    var suffix = ""
+                    if count > 1 {
+                        nameIndices[key, default: 0] += 1
+                        suffix = " #\(nameIndices[key]!)"
+                    }
+                    let item = createSessionMenuItem(session, suffix: suffix)
+                    menu.addItem(item)
+                }
             }
         }
 
@@ -391,6 +434,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
                 groupEditSubmenu.addItem(NSMenuItem.separator())
 
+                // Reorder controls
+                let sortedGroups = sessionManager.groups.sorted { $0.order < $1.order }
+                let groupIndex = sortedGroups.firstIndex { $0.id == group.id } ?? 0
+
+                let moveUpItem = NSMenuItem(title: "Move Up", action: #selector(moveGroupUp(_:)), keyEquivalent: "")
+                moveUpItem.target = self
+                moveUpItem.representedObject = group.id
+                moveUpItem.isEnabled = groupIndex > 0
+                groupEditSubmenu.addItem(moveUpItem)
+
+                let moveDownItem = NSMenuItem(title: "Move Down", action: #selector(moveGroupDown(_:)), keyEquivalent: "")
+                moveDownItem.target = self
+                moveDownItem.representedObject = group.id
+                moveDownItem.isEnabled = groupIndex < sortedGroups.count - 1
+                groupEditSubmenu.addItem(moveDownItem)
+
+                groupEditSubmenu.addItem(NSMenuItem.separator())
+
                 let renameItem = NSMenuItem(title: "Rename...", action: #selector(renameGroup(_:)), keyEquivalent: "")
                 renameItem.target = self
                 renameItem.representedObject = group.id
@@ -468,6 +529,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             let nsRange = NSRange(bulletRange, in: text)
             attributedString.addAttributes(attributes, range: nsRange)
         }
+        return attributedString
+    }
+
+    func createColoredGroupHeader(_ name: String, color: NSColor) -> NSAttributedString {
+        let bulletAttributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: color,
+            .font: NSFont.menuFont(ofSize: 0)
+        ]
+        let textAttributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .font: NSFont.menuFont(ofSize: 0)
+        ]
+
+        let attributedString = NSMutableAttributedString()
+        attributedString.append(NSAttributedString(string: "● ", attributes: bulletAttributes))
+        attributedString.append(NSAttributedString(string: name, attributes: textAttributes))
         return attributedString
     }
 
@@ -888,6 +965,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             sessionManager.deleteGroup(id: groupId)
             updateMenu()
         }
+    }
+
+    @objc func moveGroupUp(_ sender: NSMenuItem) {
+        guard let groupId = sender.representedObject as? String else { return }
+        sessionManager.moveGroupUp(id: groupId)
+        updateMenu()
+    }
+
+    @objc func moveGroupDown(_ sender: NSMenuItem) {
+        guard let groupId = sender.representedObject as? String else { return }
+        sessionManager.moveGroupDown(id: groupId)
+        updateMenu()
     }
 
     @objc func setGroupColor(_ sender: NSMenuItem) {

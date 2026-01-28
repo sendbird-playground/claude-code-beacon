@@ -1347,6 +1347,46 @@ class SessionManager {
         onSessionsChanged?()
     }
 
+    func moveGroupUp(id: String) {
+        let sortedGroups = groups.sorted { $0.order < $1.order }
+        guard let currentIndex = sortedGroups.firstIndex(where: { $0.id == id }),
+              currentIndex > 0 else { return }
+
+        let prevGroup = sortedGroups[currentIndex - 1]
+        let currentGroup = sortedGroups[currentIndex]
+
+        // Swap orders
+        if let prevIdx = groups.firstIndex(where: { $0.id == prevGroup.id }),
+           let currIdx = groups.firstIndex(where: { $0.id == currentGroup.id }) {
+            let tempOrder = groups[prevIdx].order
+            groups[prevIdx].order = groups[currIdx].order
+            groups[currIdx].order = tempOrder
+        }
+
+        saveGroups()
+        onSessionsChanged?()
+    }
+
+    func moveGroupDown(id: String) {
+        let sortedGroups = groups.sorted { $0.order < $1.order }
+        guard let currentIndex = sortedGroups.firstIndex(where: { $0.id == id }),
+              currentIndex < sortedGroups.count - 1 else { return }
+
+        let nextGroup = sortedGroups[currentIndex + 1]
+        let currentGroup = sortedGroups[currentIndex]
+
+        // Swap orders
+        if let nextIdx = groups.firstIndex(where: { $0.id == nextGroup.id }),
+           let currIdx = groups.firstIndex(where: { $0.id == currentGroup.id }) {
+            let tempOrder = groups[nextIdx].order
+            groups[nextIdx].order = groups[currIdx].order
+            groups[currIdx].order = tempOrder
+        }
+
+        saveGroups()
+        onSessionsChanged?()
+    }
+
     func setGroupNotificationOverride(id: String, enabled: Bool?) {
         if let index = groups.firstIndex(where: { $0.id == id }) {
             groups[index].notificationOverride = enabled
