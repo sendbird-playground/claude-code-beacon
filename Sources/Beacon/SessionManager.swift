@@ -1785,15 +1785,37 @@ class SessionManager {
         cancelReminders(for: sessionId)
     }
 
+    private var alertSound: NSSound?
+
     func playAlertSound() {
         NSLog("Playing alert sound...")
-        DispatchQueue.main.async {
-            if let sound = NSSound(named: "Glass") {
+        DispatchQueue.main.async { [weak self] in
+            // Keep reference to sound
+            if self?.alertSound == nil {
+                self?.alertSound = NSSound(named: "Glass")
+            }
+            if let sound = self?.alertSound {
+                sound.stop()
                 sound.play()
                 NSLog("Sound played via NSSound")
             } else {
                 NSLog("Failed to load Glass sound")
             }
+        }
+    }
+
+    func testVoice() {
+        NSLog("Testing voice...")
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            if self.speechSynthesizer == nil {
+                self.speechSynthesizer = NSSpeechSynthesizer()
+            }
+
+            let testText = "Hello, this is a test"
+            NSLog("Speaking test: \(testText)")
+            self.speechSynthesizer?.startSpeaking(testText)
         }
     }
 

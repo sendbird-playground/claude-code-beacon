@@ -851,6 +851,15 @@ struct SettingsView: View {
                     .onChange(of: voiceEnabled) { new in
                         sessionManager.voiceEnabled = new
                     }
+
+                HStack {
+                    Button("Test Sound") {
+                        sessionManager.playAlertSound()
+                    }
+                    Button("Test Voice") {
+                        sessionManager.testVoice()
+                    }
+                }
             }
 
             Section("Reminders") {
