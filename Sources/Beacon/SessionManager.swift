@@ -1379,13 +1379,35 @@ class SessionManager {
     // MARK: - Settings
 
     struct BeaconSettings: Codable {
-        var notificationEnabled: Bool = true
-        var soundEnabled: Bool = true
-        var voiceEnabled: Bool = true
-        var maxRecentSessions: Int = 10
-        var reminderEnabled: Bool = false
-        var reminderInterval: Int = 60
-        var reminderCount: Int = 3
+        var notificationEnabled: Bool
+        var soundEnabled: Bool
+        var voiceEnabled: Bool
+        var maxRecentSessions: Int
+        var reminderEnabled: Bool
+        var reminderInterval: Int
+        var reminderCount: Int
+
+        // Custom decoder to handle missing keys with defaults
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            notificationEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationEnabled) ?? true
+            soundEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? true
+            voiceEnabled = try container.decodeIfPresent(Bool.self, forKey: .voiceEnabled) ?? true
+            maxRecentSessions = try container.decodeIfPresent(Int.self, forKey: .maxRecentSessions) ?? 10
+            reminderEnabled = try container.decodeIfPresent(Bool.self, forKey: .reminderEnabled) ?? false
+            reminderInterval = try container.decodeIfPresent(Int.self, forKey: .reminderInterval) ?? 60
+            reminderCount = try container.decodeIfPresent(Int.self, forKey: .reminderCount) ?? 3
+        }
+
+        init(notificationEnabled: Bool, soundEnabled: Bool, voiceEnabled: Bool, maxRecentSessions: Int, reminderEnabled: Bool, reminderInterval: Int, reminderCount: Int) {
+            self.notificationEnabled = notificationEnabled
+            self.soundEnabled = soundEnabled
+            self.voiceEnabled = voiceEnabled
+            self.maxRecentSessions = maxRecentSessions
+            self.reminderEnabled = reminderEnabled
+            self.reminderInterval = reminderInterval
+            self.reminderCount = reminderCount
+        }
     }
 
     func saveSettings() {
