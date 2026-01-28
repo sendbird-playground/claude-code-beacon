@@ -303,9 +303,43 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         updateIconBadge()
     }
 
+    func formatElapsedTime(_ date: Date) -> String {
+        let elapsed = Int(Date().timeIntervalSince(date))
+        if elapsed < 60 {
+            return "\(elapsed)s"
+        } else if elapsed < 3600 {
+            return "\(elapsed / 60)m"
+        } else {
+            return "\(elapsed / 3600)h"
+        }
+    }
+
     func createSessionMenuItem(_ session: ClaudeSession, suffix: String = "") -> NSMenuItem {
-        // Show terminal and project name prominently
-        let title = "  \(session.terminalInfo) · \(session.projectName)\(suffix)"
+        // Status indicator and time context
+        let statusIndicator: String
+        let timeContext: String
+
+        switch session.status {
+        case .running:
+            statusIndicator = "●"
+            timeContext = " (\(formatElapsedTime(session.createdAt)))"
+        case .completed:
+            statusIndicator = "○"
+            if let completedAt = session.completedAt {
+                timeContext = " (\(formatElapsedTime(completedAt)) ago)"
+            } else {
+                timeContext = ""
+            }
+        case .acknowledged:
+            statusIndicator = "✓"
+            if let completedAt = session.completedAt {
+                timeContext = " (\(formatElapsedTime(completedAt)) ago)"
+            } else {
+                timeContext = ""
+            }
+        }
+
+        let title = "  \(statusIndicator) \(session.terminalInfo) · \(session.projectName)\(suffix)\(timeContext)"
 
         // No action on main item - clicking opens submenu, menu stays open
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
