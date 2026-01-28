@@ -394,6 +394,7 @@ class SessionManager {
     }
 
     func scanForSessions() {
+        NSLog("scanForSessions: starting scan, knownPids=\(knownPids.count), sessions=\(sessions.count)")
         let claudeProcesses = findClaudeProcesses()
         var needsUIUpdate = false
 
@@ -401,10 +402,12 @@ class SessionManager {
         for process in claudeProcesses {
             // Skip ignored PIDs (user marked as complete)
             if ignoredPids.contains(process.pid) {
+                NSLog("scanForSessions: skipping ignored PID \(process.pid)")
                 continue
             }
 
             if !knownPids.contains(process.pid) {
+                NSLog("scanForSessions: new PID \(process.pid) detected")
                 knownPids.insert(process.pid)
 
                 // Check if we already have a session for this PID
@@ -431,6 +434,7 @@ class SessionManager {
                     sessions.insert(session, at: 0)
                     saveSessions()
                     needsUIUpdate = true
+                    NSLog("scanForSessions: created session for PID \(process.pid), project=\(projectName)")
 
                     // Start monitoring this process for immediate exit notification
                     startProcessExitMonitor(pid: process.pid)
@@ -528,10 +532,11 @@ class SessionManager {
 
         do {
             try gitTask.run()
+            // Read before waitUntilExit to avoid deadlock
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             gitTask.waitUntilExit()
 
             if gitTask.terminationStatus == 0 {
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let gitRoot = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
                 if !gitRoot.isEmpty {
@@ -604,9 +609,10 @@ class SessionManager {
 
         do {
             try task.run()
+            // Read data BEFORE waitUntilExit to avoid pipe buffer deadlock
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             task.waitUntilExit()
 
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
 
             for line in output.components(separatedBy: "\n") {
@@ -622,14 +628,18 @@ class SessionManager {
                             let ttyName = getProcessTty(pid: pid)
                             let weztermPane = getWeztermPane(pid: pid)
                             processes.append(ClaudeProcess(pid: pid, cwd: cwd, terminal: terminal, ttyName: ttyName, weztermPane: weztermPane))
+                            NSLog("Found Claude process: PID=\(pid), cwd=\(cwd), terminal=\(terminal)")
+                        } else {
+                            NSLog("Could not get cwd for PID \(pid)")
                         }
                     }
                 }
             }
         } catch {
-            print("Error finding Claude processes: \(error)")
+            NSLog("Error finding Claude processes: \(error)")
         }
 
+        NSLog("findClaudeProcesses: found \(processes.count) processes")
         return processes
     }
 
@@ -644,9 +654,9 @@ class SessionManager {
 
         do {
             try task.run()
-            task.waitUntilExit()
-
+            // Read before waitUntilExit to avoid deadlock
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
             let output = String(data: data, encoding: .utf8) ?? ""
 
             for line in output.components(separatedBy: "\n") {
@@ -671,9 +681,10 @@ class SessionManager {
 
         do {
             try task.run()
+            // Read before waitUntilExit to avoid deadlock
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             task.waitUntilExit()
 
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let tty = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !tty.isEmpty && tty != "??" {
                 return tty
@@ -774,9 +785,10 @@ class SessionManager {
 
         do {
             try task.run()
+            // Read before waitUntilExit to avoid deadlock
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             task.waitUntilExit()
 
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let ppidStr = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return Int32(ppidStr)
         } catch {
@@ -794,9 +806,10 @@ class SessionManager {
 
         do {
             try task.run()
+            // Read before waitUntilExit to avoid deadlock
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             task.waitUntilExit()
 
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let comm = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
             // Check if it's an app (contains .app in path or known app names)
