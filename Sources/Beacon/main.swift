@@ -861,20 +861,17 @@ struct SettingsView: View {
 
             Section("Pronunciation Rules") {
                 ForEach(Array(pronunciationRules.keys.sorted()), id: \.self) { pattern in
-                    HStack {
-                        Text(pattern)
-                            .fontWeight(.medium)
-                        Image(systemName: "arrow.right")
-                            .foregroundColor(.secondary)
-                        Text(pronunciationRules[pattern] ?? "")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Button(action: { deleteRule(pattern) }) {
-                            Image(systemName: "trash")
-                                .foregroundColor(.red)
+                    PronunciationRuleRow(
+                        pattern: pattern,
+                        pronunciation: pronunciationRules[pattern] ?? "",
+                        onUpdate: { newPronunciation in
+                            sessionManager.addPronunciationRule(pattern: pattern, pronunciation: newPronunciation)
+                            pronunciationRules = sessionManager.pronunciationRules
+                        },
+                        onDelete: {
+                            deleteRule(pattern)
                         }
-                        .buttonStyle(.plain)
-                    }
+                    )
                 }
 
                 Button("Add Rule...") {
@@ -941,6 +938,66 @@ struct SettingsView: View {
     func deleteRule(_ pattern: String) {
         sessionManager.removePronunciationRule(pattern: pattern)
         pronunciationRules = sessionManager.pronunciationRules
+    }
+}
+
+struct PronunciationRuleRow: View {
+    let pattern: String
+    let pronunciation: String
+    let onUpdate: (String) -> Void
+    let onDelete: () -> Void
+
+    @State private var isEditing = false
+    @State private var editedPronunciation = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack {
+            Text(pattern)
+                .fontWeight(.medium)
+            Image(systemName: "arrow.right")
+                .foregroundColor(.secondary)
+
+            if isEditing {
+                TextField("Pronunciation", text: $editedPronunciation)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 120)
+                    .focused($isFocused)
+                    .onSubmit {
+                        saveAndClose()
+                    }
+                    .onChange(of: isFocused) { focused in
+                        if !focused {
+                            saveAndClose()
+                        }
+                    }
+            } else {
+                Text(pronunciation)
+                    .foregroundColor(.secondary)
+                    .onTapGesture {
+                        editedPronunciation = pronunciation
+                        isEditing = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            isFocused = true
+                        }
+                    }
+            }
+
+            Spacer()
+
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+                    .foregroundColor(.red)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func saveAndClose() {
+        if !editedPronunciation.isEmpty && editedPronunciation != pronunciation {
+            onUpdate(editedPronunciation)
+        }
+        isEditing = false
     }
 }
 
