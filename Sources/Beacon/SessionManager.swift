@@ -508,7 +508,7 @@ class SessionManager {
         let claudeProcesses = findClaudeProcesses()
         var needsUIUpdate = false
 
-        // Check for new processes
+        // Check for new processes or processes that need to be re-activated
         for process in claudeProcesses {
             // Skip ignored PIDs (user marked as complete)
             if ignoredPids.contains(process.pid) {
@@ -516,45 +516,46 @@ class SessionManager {
                 continue
             }
 
-            if !knownPids.contains(process.pid) {
-                NSLog("scanForSessions: new PID \(process.pid) detected")
+            // Check if we have a running session for this PID
+            let hasRunningSession = sessions.contains(where: { $0.pid == process.pid && $0.status == .running })
+
+            if !hasRunningSession {
+                // Either new PID or existing PID whose session was acknowledged/completed
+                // but process is still running - need to create a new running session
                 knownPids.insert(process.pid)
 
-                // Check if we already have a session for this PID
-                if !sessions.contains(where: { $0.pid == process.pid && $0.status == .running }) {
-                    // Try to find git root for better project name
-                    let projectName = getProjectName(for: process.cwd, terminal: process.terminal)
+                // Try to find git root for better project name
+                let projectName = getProjectName(for: process.cwd, terminal: process.terminal)
 
-                    // Get PyCharm window name if this is a PyCharm session
-                    var pycharmWindow: String? = nil
-                    if process.terminal == "PyCharm" {
-                        pycharmWindow = getFrontmostPyCharmWindow()
-                    }
-
-                    // Inherit groupId from previous session with same working directory
-                    let inheritedGroupId = sessions.first(where: {
-                        $0.workingDirectory == process.cwd && $0.groupId != nil
-                    })?.groupId
-
-                    let session = ClaudeSession(
-                        projectName: projectName,
-                        terminalInfo: process.terminal,
-                        workingDirectory: process.cwd,
-                        status: .running,
-                        pid: process.pid,
-                        weztermPane: process.weztermPane,
-                        ttyName: process.ttyName,
-                        pycharmWindow: pycharmWindow,
-                        groupId: inheritedGroupId
-                    )
-                    sessions.insert(session, at: 0)
-                    saveSessions()
-                    needsUIUpdate = true
-                    NSLog("scanForSessions: created session for PID \(process.pid), project=\(projectName), groupId=\(inheritedGroupId ?? "none")")
-
-                    // Start monitoring this process for immediate exit notification
-                    startProcessExitMonitor(pid: process.pid)
+                // Get PyCharm window name if this is a PyCharm session
+                var pycharmWindow: String? = nil
+                if process.terminal == "PyCharm" {
+                    pycharmWindow = getFrontmostPyCharmWindow()
                 }
+
+                // Inherit groupId from previous session with same working directory
+                let inheritedGroupId = sessions.first(where: {
+                    $0.workingDirectory == process.cwd && $0.groupId != nil
+                })?.groupId
+
+                let session = ClaudeSession(
+                    projectName: projectName,
+                    terminalInfo: process.terminal,
+                    workingDirectory: process.cwd,
+                    status: .running,
+                    pid: process.pid,
+                    weztermPane: process.weztermPane,
+                    ttyName: process.ttyName,
+                    pycharmWindow: pycharmWindow,
+                    groupId: inheritedGroupId
+                )
+                sessions.insert(session, at: 0)
+                saveSessions()
+                needsUIUpdate = true
+                NSLog("scanForSessions: created session for PID \(process.pid), project=\(projectName), groupId=\(inheritedGroupId ?? "none")")
+
+                // Start monitoring this process for immediate exit notification
+                startProcessExitMonitor(pid: process.pid)
             }
         }
 
