@@ -655,13 +655,21 @@ class SessionsViewModel: ObservableObject {
 
     func formatLastAlert(_ session: ClaudeSession) -> String {
         if let alertTime = session.alertTriggeredAt {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm"
-            return "Last alert: \(formatter.string(from: alertTime))"
+            let elapsed = Int(Date().timeIntervalSince(alertTime))
+            return "Last alert: \(formatElapsed(elapsed))"
         } else {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm"
-            return "Started: \(formatter.string(from: session.createdAt))"
+            let elapsed = Int(Date().timeIntervalSince(session.createdAt))
+            return "Started: \(formatElapsed(elapsed))"
+        }
+    }
+
+    func formatElapsed(_ seconds: Int) -> String {
+        if seconds < 60 {
+            return "\(seconds)s"
+        } else if seconds < 3600 {
+            return "\(seconds / 60)m"
+        } else {
+            return "\(seconds / 3600)h"
         }
     }
 
