@@ -174,6 +174,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         voiceItem.state = sessionManager.voiceEnabled ? .on : .off
         settingsSubmenu.addItem(voiceItem)
 
+        // Pronunciation Rules submenu
+        let pronunciationItem = NSMenuItem(title: "Pronunciation Rules", action: nil, keyEquivalent: "")
+        let pronunciationSubmenu = NSMenu()
+
+        if sessionManager.pronunciationRules.isEmpty {
+            let emptyItem = NSMenuItem(title: "No rules defined", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            pronunciationSubmenu.addItem(emptyItem)
+        } else {
+            for (pattern, pronunciation) in sessionManager.pronunciationRules.sorted(by: { $0.key < $1.key }) {
+                let ruleItem = NSMenuItem(title: "\(pattern) → \(pronunciation)", action: nil, keyEquivalent: "")
+                let ruleSubmenu = NSMenu()
+
+                let removeItem = NSMenuItem(title: "Remove", action: #selector(removePronunciationRule(_:)), keyEquivalent: "")
+                removeItem.target = self
+                removeItem.representedObject = pattern
+                ruleSubmenu.addItem(removeItem)
+
+                ruleItem.submenu = ruleSubmenu
+                pronunciationSubmenu.addItem(ruleItem)
+            }
+        }
+
+        pronunciationSubmenu.addItem(NSMenuItem.separator())
+        let addRuleItem = NSMenuItem(title: "Add Rule...", action: #selector(addPronunciationRule), keyEquivalent: "")
+        addRuleItem.target = self
+        pronunciationSubmenu.addItem(addRuleItem)
+
+        pronunciationItem.submenu = pronunciationSubmenu
+        settingsSubmenu.addItem(pronunciationItem)
+
         settingsSubmenu.addItem(NSMenuItem.separator())
 
         // Notification status and test
@@ -419,6 +450,46 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     @objc func clearRecent() {
         sessionManager.clearRecent()
+    }
+
+    @objc func addPronunciationRule() {
+        let alert = NSAlert()
+        alert.messageText = "Add Pronunciation Rule"
+        alert.informativeText = "Enter the text pattern and how it should be pronounced."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+
+        let stackView = NSStackView(frame: NSRect(x: 0, y: 0, width: 300, height: 60))
+        stackView.orientation = .vertical
+        stackView.spacing = 8
+
+        let patternField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        patternField.placeholderString = "Pattern (e.g., vitess)"
+
+        let pronunciationField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        pronunciationField.placeholderString = "Pronunciation (e.g., vee-tess)"
+
+        stackView.addArrangedSubview(patternField)
+        stackView.addArrangedSubview(pronunciationField)
+
+        alert.accessoryView = stackView
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            let pattern = patternField.stringValue.trimmingCharacters(in: .whitespaces)
+            let pronunciation = pronunciationField.stringValue.trimmingCharacters(in: .whitespaces)
+
+            if !pattern.isEmpty && !pronunciation.isEmpty {
+                sessionManager.addPronunciationRule(pattern: pattern, pronunciation: pronunciation)
+                updateMenu()
+            }
+        }
+    }
+
+    @objc func removePronunciationRule(_ sender: NSMenuItem) {
+        guard let pattern = sender.representedObject as? String else { return }
+        sessionManager.removePronunciationRule(pattern: pattern)
+        updateMenu()
     }
 
     @objc func toggleNotification() {

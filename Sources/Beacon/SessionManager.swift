@@ -124,6 +124,11 @@ class SessionManager {
         didSet { saveSettings() }
     }
 
+    // Voice pronunciation rules: "pattern" -> "pronunciation"
+    var pronunciationRules: [String: String] = [:] {
+        didSet { saveSettings() }
+    }
+
     // Track reminder counts per session
     private var reminderCounts: [String: Int] = [:]
 
@@ -1321,10 +1326,27 @@ class SessionManager {
     }
 
     func speakSummary(_ session: ClaudeSession) {
+        let textToSpeak = applyPronunciationRules(session.projectName)
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-        task.arguments = [session.projectName]
+        task.arguments = [textToSpeak]
         try? task.run()
+    }
+
+    func applyPronunciationRules(_ text: String) -> String {
+        var result = text
+        for (pattern, replacement) in pronunciationRules {
+            result = result.replacingOccurrences(of: pattern, with: replacement, options: .caseInsensitive)
+        }
+        return result
+    }
+
+    func addPronunciationRule(pattern: String, pronunciation: String) {
+        pronunciationRules[pattern] = pronunciation
+    }
+
+    func removePronunciationRule(pattern: String) {
+        pronunciationRules.removeValue(forKey: pattern)
     }
 
     func cancelNotifications(for sessionId: String) {
@@ -1386,6 +1408,7 @@ class SessionManager {
         var reminderEnabled: Bool
         var reminderInterval: Int
         var reminderCount: Int
+        var pronunciationRules: [String: String]
 
         // Custom decoder to handle missing keys with defaults
         init(from decoder: Decoder) throws {
@@ -1397,9 +1420,10 @@ class SessionManager {
             reminderEnabled = try container.decodeIfPresent(Bool.self, forKey: .reminderEnabled) ?? false
             reminderInterval = try container.decodeIfPresent(Int.self, forKey: .reminderInterval) ?? 60
             reminderCount = try container.decodeIfPresent(Int.self, forKey: .reminderCount) ?? 3
+            pronunciationRules = try container.decodeIfPresent([String: String].self, forKey: .pronunciationRules) ?? [:]
         }
 
-        init(notificationEnabled: Bool, soundEnabled: Bool, voiceEnabled: Bool, maxRecentSessions: Int, reminderEnabled: Bool, reminderInterval: Int, reminderCount: Int) {
+        init(notificationEnabled: Bool, soundEnabled: Bool, voiceEnabled: Bool, maxRecentSessions: Int, reminderEnabled: Bool, reminderInterval: Int, reminderCount: Int, pronunciationRules: [String: String]) {
             self.notificationEnabled = notificationEnabled
             self.soundEnabled = soundEnabled
             self.voiceEnabled = voiceEnabled
@@ -1407,6 +1431,7 @@ class SessionManager {
             self.reminderEnabled = reminderEnabled
             self.reminderInterval = reminderInterval
             self.reminderCount = reminderCount
+            self.pronunciationRules = pronunciationRules
         }
     }
 
@@ -1419,7 +1444,8 @@ class SessionManager {
                 maxRecentSessions: maxRecentSessions,
                 reminderEnabled: reminderEnabled,
                 reminderInterval: reminderInterval,
-                reminderCount: reminderCount
+                reminderCount: reminderCount,
+                pronunciationRules: pronunciationRules
             )
             let data = try JSONEncoder().encode(settings)
             try data.write(to: settingsURL, options: .atomic)
@@ -1441,6 +1467,7 @@ class SessionManager {
             reminderEnabled = settings.reminderEnabled
             reminderInterval = settings.reminderInterval
             reminderCount = settings.reminderCount
+            pronunciationRules = settings.pronunciationRules
         } catch {
             print("Failed to load settings: \(error)")
         }
