@@ -531,6 +531,11 @@ class SessionManager {
                         pycharmWindow = getFrontmostPyCharmWindow()
                     }
 
+                    // Inherit groupId from previous session with same working directory
+                    let inheritedGroupId = sessions.first(where: {
+                        $0.workingDirectory == process.cwd && $0.groupId != nil
+                    })?.groupId
+
                     let session = ClaudeSession(
                         projectName: projectName,
                         terminalInfo: process.terminal,
@@ -539,12 +544,13 @@ class SessionManager {
                         pid: process.pid,
                         weztermPane: process.weztermPane,
                         ttyName: process.ttyName,
-                        pycharmWindow: pycharmWindow
+                        pycharmWindow: pycharmWindow,
+                        groupId: inheritedGroupId
                     )
                     sessions.insert(session, at: 0)
                     saveSessions()
                     needsUIUpdate = true
-                    NSLog("scanForSessions: created session for PID \(process.pid), project=\(projectName)")
+                    NSLog("scanForSessions: created session for PID \(process.pid), project=\(projectName), groupId=\(inheritedGroupId ?? "none")")
 
                     // Start monitoring this process for immediate exit notification
                     startProcessExitMonitor(pid: process.pid)
