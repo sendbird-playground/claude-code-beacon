@@ -125,13 +125,13 @@ struct GroupSectionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Group header - always visible for drag targets
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Circle()
                     .fill(Color(hex: group.colorHex) ?? .gray)
                     .frame(width: 8, height: 8)
                 Text(group.name)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.primary)
                 Spacer()
                 if sessions.isEmpty {
                     Text("Drop here")
@@ -140,12 +140,12 @@ struct GroupSectionView: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-            .background(isTargeted ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05))
+            .padding(.vertical, 6)
+            .background(isTargeted ? Color.accentColor.opacity(0.2) : Color.clear)
 
-            // Sessions
+            // Sessions (indented as children)
             ForEach(sessions, id: \.id) { session in
-                SessionRowView(session: session, viewModel: viewModel)
+                SessionRowView(session: session, viewModel: viewModel, indented: true)
                     .onDrag {
                         draggingSession = session
                         return NSItemProvider(object: session.id as NSString)
@@ -199,6 +199,7 @@ struct UngroupedSectionView: View {
 struct SessionRowView: View {
     let session: ClaudeSession
     @ObservedObject var viewModel: SessionsViewModel
+    var indented: Bool = false
     @State private var isHovered = false
 
     var body: some View {
@@ -226,7 +227,8 @@ struct SessionRowView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, indented ? 28 : 12)  // Extra indent for grouped sessions
+        .padding(.trailing, 12)
         .padding(.vertical, 6)
         .background(isHovered ? Color.primary.opacity(0.1) : Color.clear)
         .onHover { isHovered = $0 }
