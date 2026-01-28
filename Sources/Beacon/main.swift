@@ -63,24 +63,19 @@ struct SessionsPopoverView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        // Grouped sessions
+                        // All groups (including empty ones for drop targets)
                         ForEach(viewModel.sortedGroups, id: \.id) { group in
                             GroupSectionView(
                                 group: group,
                                 sessions: viewModel.sessions(for: group),
                                 viewModel: viewModel,
-                                draggingSession: $draggingSession
+                                draggingSession: $draggingSession,
+                                draggingGroup: $draggingGroup
                             )
                             .onDrag {
                                 draggingGroup = group
                                 return NSItemProvider(object: group.id as NSString)
                             }
-                            .onDrop(of: [.text], delegate: GroupDropDelegate(
-                                group: group,
-                                viewModel: viewModel,
-                                draggingGroup: $draggingGroup,
-                                draggingSession: $draggingSession
-                            ))
                         }
 
                         // Ungrouped sessions
@@ -124,34 +119,46 @@ struct GroupSectionView: View {
     let sessions: [ClaudeSession]
     @ObservedObject var viewModel: SessionsViewModel
     @Binding var draggingSession: ClaudeSession?
+    @Binding var draggingGroup: SessionGroup?
+    @State private var isTargeted = false
 
     var body: some View {
-        if !sessions.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                // Group header
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(Color(hex: group.colorHex) ?? .gray)
-                        .frame(width: 8, height: 8)
-                    Text(group.name)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(Color.primary.opacity(0.05))
-
-                // Sessions
-                ForEach(sessions, id: \.id) { session in
-                    SessionRowView(session: session, viewModel: viewModel)
-                        .onDrag {
-                            draggingSession = session
-                            return NSItemProvider(object: session.id as NSString)
-                        }
+        VStack(alignment: .leading, spacing: 0) {
+            // Group header - always visible for drag targets
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(Color(hex: group.colorHex) ?? .gray)
+                    .frame(width: 8, height: 8)
+                Text(group.name)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                if sessions.isEmpty {
+                    Text("Drop here")
+                        .font(.caption2)
+                        .foregroundColor(.secondary.opacity(0.6))
                 }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .background(isTargeted ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05))
+
+            // Sessions
+            ForEach(sessions, id: \.id) { session in
+                SessionRowView(session: session, viewModel: viewModel)
+                    .onDrag {
+                        draggingSession = session
+                        return NSItemProvider(object: session.id as NSString)
+                    }
+            }
         }
+        .onDrop(of: [.text], delegate: GroupDropDelegate(
+            group: group,
+            viewModel: viewModel,
+            draggingGroup: $draggingGroup,
+            draggingSession: $draggingSession,
+            isTargeted: $isTargeted
+        ))
     }
 }
 
@@ -270,22 +277,30 @@ struct GroupDropDelegate: DropDelegate {
     let viewModel: SessionsViewModel
     @Binding var draggingGroup: SessionGroup?
     @Binding var draggingSession: ClaudeSession?
+    @Binding var isTargeted: Bool
 
     func performDrop(info: DropInfo) -> Bool {
         // Handle session drop (move to this group)
         if let session = draggingSession {
             viewModel.moveSession(session, toGroup: group.id)
             draggingSession = nil
+            isTargeted = false
             return true
         }
         draggingGroup = nil
+        isTargeted = false
         return false
     }
 
     func dropEntered(info: DropInfo) {
+        isTargeted = true
         // Handle group reordering
         guard let dragging = draggingGroup, dragging.id != group.id else { return }
         viewModel.reorderGroup(dragging, before: group)
+    }
+
+    func dropExited(info: DropInfo) {
+        isTargeted = false
     }
 
     func validateDrop(info: DropInfo) -> Bool {
