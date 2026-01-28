@@ -776,6 +776,10 @@ struct SettingsView: View {
     @State private var showingAddGroup = false
     @State private var newGroupName = ""
     @State private var newGroupColor = "#FFB3BA"
+    @State private var pronunciationRules: [String: String]
+    @State private var showingAddRule = false
+    @State private var newRulePattern = ""
+    @State private var newRulePronunciation = ""
 
     init(sessionManager: SessionManager) {
         self.sessionManager = sessionManager
@@ -786,6 +790,7 @@ struct SettingsView: View {
         _reminderInterval = State(initialValue: sessionManager.reminderInterval)
         _reminderCount = State(initialValue: sessionManager.reminderCount)
         _groups = State(initialValue: sessionManager.groups)
+        _pronunciationRules = State(initialValue: sessionManager.pronunciationRules)
     }
 
     var body: some View {
@@ -853,6 +858,29 @@ struct SettingsView: View {
                     showingAddGroup = true
                 }
             }
+
+            Section("Pronunciation Rules") {
+                ForEach(Array(pronunciationRules.keys.sorted()), id: \.self) { pattern in
+                    HStack {
+                        Text(pattern)
+                            .fontWeight(.medium)
+                        Image(systemName: "arrow.right")
+                            .foregroundColor(.secondary)
+                        Text(pronunciationRules[pattern] ?? "")
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button(action: { deleteRule(pattern) }) {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Button("Add Rule...") {
+                    showingAddRule = true
+                }
+            }
         }
         .formStyle(.grouped)
         .padding()
@@ -896,11 +924,82 @@ struct SettingsView: View {
             .padding()
             .frame(width: 300)
         }
+        .sheet(isPresented: $showingAddRule) {
+            AddRuleSheet(
+                sessionManager: sessionManager,
+                isPresented: $showingAddRule,
+                pronunciationRules: $pronunciationRules
+            )
+        }
     }
 
     func deleteGroup(_ group: SessionGroup) {
         sessionManager.deleteGroup(id: group.id)
         groups = sessionManager.groups
+    }
+
+    func deleteRule(_ pattern: String) {
+        sessionManager.removePronunciationRule(pattern: pattern)
+        pronunciationRules = sessionManager.pronunciationRules
+    }
+}
+
+struct AddRuleSheet: View {
+    let sessionManager: SessionManager
+    @Binding var isPresented: Bool
+    @Binding var pronunciationRules: [String: String]
+    @State private var pattern = ""
+    @State private var pronunciation = ""
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Add Pronunciation Rule")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("When voice says:")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField("Pattern (e.g., Beacon)", text: $pattern)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Pronounce as:")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField("Pronunciation (e.g., 비콘)", text: $pronunciation)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            HStack {
+                Button("Cancel") {
+                    isPresented = false
+                    pattern = ""
+                    pronunciation = ""
+                }
+                Spacer()
+                Button("Test") {
+                    let task = Process()
+                    task.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+                    task.arguments = [pronunciation.isEmpty ? pattern : pronunciation]
+                    try? task.run()
+                }
+                .disabled(pattern.isEmpty && pronunciation.isEmpty)
+                Button("Add") {
+                    if !pattern.isEmpty && !pronunciation.isEmpty {
+                        sessionManager.addPronunciationRule(pattern: pattern, pronunciation: pronunciation)
+                        pronunciationRules = sessionManager.pronunciationRules
+                        pattern = ""
+                        pronunciation = ""
+                        isPresented = false
+                    }
+                }
+                .disabled(pattern.isEmpty || pronunciation.isEmpty)
+            }
+        }
+        .padding()
+        .frame(width: 320)
     }
 }
 

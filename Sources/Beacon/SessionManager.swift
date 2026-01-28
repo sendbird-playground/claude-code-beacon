@@ -539,9 +539,14 @@ class SessionManager {
                 }
 
                 // Inherit groupId from previous session with same working directory
-                let inheritedGroupId = sessions.first(where: {
-                    $0.workingDirectory == process.cwd && $0.groupId != nil
-                })?.groupId
+                let matchingSessions = sessions.filter { $0.workingDirectory == process.cwd }
+                NSLog("Looking for groupId inheritance for cwd: \(process.cwd)")
+                NSLog("Found \(matchingSessions.count) matching sessions")
+                for s in matchingSessions {
+                    NSLog("  - Session \(s.id): groupId=\(s.groupId ?? "nil"), status=\(s.status.rawValue)")
+                }
+                let inheritedGroupId = matchingSessions.first(where: { $0.groupId != nil })?.groupId
+                NSLog("Inherited groupId: \(inheritedGroupId ?? "none")")
 
                 let session = ClaudeSession(
                     projectName: projectName,
@@ -1782,13 +1787,21 @@ class SessionManager {
     }
 
     func loadSessions() {
-        guard FileManager.default.fileExists(atPath: storageURL.path) else { return }
+        guard FileManager.default.fileExists(atPath: storageURL.path) else {
+            NSLog("loadSessions: no sessions file found")
+            return
+        }
 
         do {
             let data = try Data(contentsOf: storageURL)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             sessions = try decoder.decode([ClaudeSession].self, from: data)
+
+            NSLog("loadSessions: loaded \(sessions.count) sessions")
+            for s in sessions {
+                NSLog("  - \(s.projectName): groupId=\(s.groupId ?? "nil"), status=\(s.status.rawValue)")
+            }
 
             // Reset running sessions to completed if they exist from previous run
             for i in sessions.indices where sessions[i].status == .running {
