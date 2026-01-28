@@ -389,42 +389,51 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         sessionManager.clearRecent()
     }
 
+    /// Reopen the menu after a settings change
+    func reopenMenu() {
+        updateMenu()
+        // Reopen menu on next run loop to keep it visible
+        DispatchQueue.main.async {
+            self.statusItem.button?.performClick(nil)
+        }
+    }
+
     @objc func toggleNotification() {
         sessionManager.notificationEnabled.toggle()
-        updateMenu()
+        reopenMenu()
     }
 
     @objc func toggleSound() {
         sessionManager.soundEnabled.toggle()
-        updateMenu()
+        reopenMenu()
     }
 
     @objc func toggleVoice() {
         sessionManager.voiceEnabled.toggle()
-        updateMenu()
+        reopenMenu()
     }
 
     @objc func setMaxRecent(_ sender: NSMenuItem) {
         guard let count = sender.representedObject as? Int else { return }
         sessionManager.maxRecentSessions = count
-        updateMenu()
+        reopenMenu()
     }
 
     @objc func toggleReminder() {
         sessionManager.reminderEnabled.toggle()
-        updateMenu()
+        reopenMenu()
     }
 
     @objc func setReminderInterval(_ sender: NSMenuItem) {
         guard let seconds = sender.representedObject as? Int else { return }
         sessionManager.reminderInterval = seconds
-        updateMenu()
+        reopenMenu()
     }
 
     @objc func setReminderCount(_ sender: NSMenuItem) {
         guard let count = sender.representedObject as? Int else { return }
         sessionManager.reminderCount = count
-        updateMenu()
+        reopenMenu()
     }
 
     @objc func refresh() {
