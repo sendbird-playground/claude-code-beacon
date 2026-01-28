@@ -1,5 +1,6 @@
 import AppKit
 import UserNotifications
+import SwiftUI
 
 // MARK: - Color Helpers
 
@@ -19,11 +20,502 @@ extension NSColor {
     }
 }
 
+extension Color {
+    init?(hex: String) {
+        guard let nsColor = NSColor(hex: hex) else { return nil }
+        self.init(nsColor: nsColor)
+    }
+}
+
+// MARK: - SwiftUI Popover View
+
+struct SessionsPopoverView: View {
+    @ObservedObject var viewModel: SessionsViewModel
+    @State private var draggingGroup: SessionGroup?
+    @State private var draggingSession: ClaudeSession?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                Text("Beacon")
+                    .font(.headline)
+                Spacer()
+                Button(action: { viewModel.refresh() }) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                Button(action: { viewModel.openSettings() }) {
+                    Image(systemName: "gear")
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            if viewModel.runningSessions.isEmpty {
+                Text("No running sessions")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding()
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        // Grouped sessions
+                        ForEach(viewModel.sortedGroups, id: \.id) { group in
+                            GroupSectionView(
+                                group: group,
+                                sessions: viewModel.sessions(for: group),
+                                viewModel: viewModel,
+                                draggingSession: $draggingSession
+                            )
+                            .onDrag {
+                                draggingGroup = group
+                                return NSItemProvider(object: group.id as NSString)
+                            }
+                            .onDrop(of: [.text], delegate: GroupDropDelegate(
+                                group: group,
+                                viewModel: viewModel,
+                                draggingGroup: $draggingGroup,
+                                draggingSession: $draggingSession
+                            ))
+                        }
+
+                        // Ungrouped sessions
+                        if !viewModel.ungroupedSessions.isEmpty {
+                            UngroupedSectionView(
+                                sessions: viewModel.ungroupedSessions,
+                                viewModel: viewModel,
+                                draggingSession: $draggingSession
+                            )
+                            .onDrop(of: [.text], delegate: UngroupedDropDelegate(
+                                viewModel: viewModel,
+                                draggingSession: $draggingSession
+                            ))
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(maxHeight: 400)
+            }
+
+            Divider()
+
+            // Footer
+            HStack {
+                Button("Quit") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+        .frame(width: 280)
+    }
+}
+
+struct GroupSectionView: View {
+    let group: SessionGroup
+    let sessions: [ClaudeSession]
+    @ObservedObject var viewModel: SessionsViewModel
+    @Binding var draggingSession: ClaudeSession?
+
+    var body: some View {
+        if !sessions.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                // Group header
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color(hex: group.colorHex) ?? .gray)
+                        .frame(width: 8, height: 8)
+                    Text(group.name)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color.primary.opacity(0.05))
+
+                // Sessions
+                ForEach(sessions, id: \.id) { session in
+                    SessionRowView(session: session, viewModel: viewModel)
+                        .onDrag {
+                            draggingSession = session
+                            return NSItemProvider(object: session.id as NSString)
+                        }
+                }
+            }
+        }
+    }
+}
+
+struct UngroupedSectionView: View {
+    let sessions: [ClaudeSession]
+    @ObservedObject var viewModel: SessionsViewModel
+    @Binding var draggingSession: ClaudeSession?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header (only if there are grouped sessions too)
+            if viewModel.hasGroupedSessions {
+                HStack(spacing: 4) {
+                    Circle()
+                        .strokeBorder(Color.secondary, lineWidth: 1)
+                        .frame(width: 8, height: 8)
+                    Text("Ungrouped")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color.primary.opacity(0.05))
+            }
+
+            ForEach(sessions, id: \.id) { session in
+                SessionRowView(session: session, viewModel: viewModel)
+                    .onDrag {
+                        draggingSession = session
+                        return NSItemProvider(object: session.id as NSString)
+                    }
+            }
+        }
+    }
+}
+
+struct SessionRowView: View {
+    let session: ClaudeSession
+    @ObservedObject var viewModel: SessionsViewModel
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color.green)
+                .frame(width: 6, height: 6)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(session.terminalInfo) · \(session.projectName)")
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                Text(viewModel.formatElapsedTime(session.createdAt))
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            if isHovered {
+                Button(action: { viewModel.showSession(session) }) {
+                    Image(systemName: "arrow.right.circle")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(isHovered ? Color.primary.opacity(0.1) : Color.clear)
+        .onHover { isHovered = $0 }
+        .onTapGesture {
+            viewModel.showSession(session)
+        }
+    }
+}
+
+// MARK: - Drop Delegates
+
+struct GroupDropDelegate: DropDelegate {
+    let group: SessionGroup
+    let viewModel: SessionsViewModel
+    @Binding var draggingGroup: SessionGroup?
+    @Binding var draggingSession: ClaudeSession?
+
+    func performDrop(info: DropInfo) -> Bool {
+        // Handle session drop (move to this group)
+        if let session = draggingSession {
+            viewModel.moveSession(session, toGroup: group.id)
+            draggingSession = nil
+            return true
+        }
+        draggingGroup = nil
+        return false
+    }
+
+    func dropEntered(info: DropInfo) {
+        // Handle group reordering
+        guard let dragging = draggingGroup, dragging.id != group.id else { return }
+        viewModel.reorderGroup(dragging, before: group)
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        return draggingGroup != nil || draggingSession != nil
+    }
+}
+
+struct UngroupedDropDelegate: DropDelegate {
+    let viewModel: SessionsViewModel
+    @Binding var draggingSession: ClaudeSession?
+
+    func performDrop(info: DropInfo) -> Bool {
+        if let session = draggingSession {
+            viewModel.moveSession(session, toGroup: nil)
+            draggingSession = nil
+            return true
+        }
+        return false
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        return draggingSession != nil
+    }
+}
+
+// MARK: - ViewModel
+
+class SessionsViewModel: ObservableObject {
+    @Published var sessions: [ClaudeSession] = []
+    @Published var groups: [SessionGroup] = []
+
+    private let sessionManager = SessionManager.shared
+    weak var appDelegate: AppDelegate?
+
+    init() {
+        refresh()
+        sessionManager.onSessionsChanged = { [weak self] in
+            DispatchQueue.main.async {
+                self?.refresh()
+            }
+        }
+    }
+
+    func refresh() {
+        sessions = sessionManager.sessions
+        groups = sessionManager.groups
+    }
+
+    var runningSessions: [ClaudeSession] {
+        sessions.filter { $0.status == .running }
+    }
+
+    var sortedGroups: [SessionGroup] {
+        groups.sorted { $0.order < $1.order }
+    }
+
+    var ungroupedSessions: [ClaudeSession] {
+        runningSessions
+            .filter { $0.groupId == nil }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    var hasGroupedSessions: Bool {
+        runningSessions.contains { $0.groupId != nil }
+    }
+
+    func sessions(for group: SessionGroup) -> [ClaudeSession] {
+        runningSessions
+            .filter { $0.groupId == group.id }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func formatElapsedTime(_ date: Date) -> String {
+        let elapsed = Int(Date().timeIntervalSince(date))
+        if elapsed < 60 {
+            return "\(elapsed)s"
+        } else if elapsed < 3600 {
+            return "\(elapsed / 60)m"
+        } else {
+            return "\(elapsed / 3600)h"
+        }
+    }
+
+    func showSession(_ session: ClaudeSession) {
+        sessionManager.navigateToSession(id: session.id)
+        appDelegate?.closePopover()
+    }
+
+    func moveSession(_ session: ClaudeSession, toGroup groupId: String?) {
+        sessionManager.setSessionGroup(sessionId: session.id, groupId: groupId)
+    }
+
+    func reorderGroup(_ dragging: SessionGroup, before target: SessionGroup) {
+        let sorted = sortedGroups
+        guard let fromIndex = sorted.firstIndex(where: { $0.id == dragging.id }),
+              let toIndex = sorted.firstIndex(where: { $0.id == target.id }),
+              fromIndex != toIndex else { return }
+
+        // Update orders
+        var newOrder = sorted
+        newOrder.remove(at: fromIndex)
+        newOrder.insert(dragging, at: toIndex)
+
+        for (index, group) in newOrder.enumerated() {
+            sessionManager.updateGroup(id: group.id, order: index)
+        }
+    }
+
+    func openSettings() {
+        appDelegate?.openSettingsWindow()
+    }
+}
+
+// MARK: - Settings View
+
+struct SettingsView: View {
+    let sessionManager: SessionManager
+    @State private var notificationEnabled: Bool
+    @State private var soundEnabled: Bool
+    @State private var voiceEnabled: Bool
+    @State private var reminderEnabled: Bool
+    @State private var reminderInterval: Int
+    @State private var reminderCount: Int
+    @State private var groups: [SessionGroup]
+    @State private var showingAddGroup = false
+    @State private var newGroupName = ""
+    @State private var newGroupColor = "#FFB3BA"
+
+    init(sessionManager: SessionManager) {
+        self.sessionManager = sessionManager
+        _notificationEnabled = State(initialValue: sessionManager.notificationEnabled)
+        _soundEnabled = State(initialValue: sessionManager.soundEnabled)
+        _voiceEnabled = State(initialValue: sessionManager.voiceEnabled)
+        _reminderEnabled = State(initialValue: sessionManager.reminderEnabled)
+        _reminderInterval = State(initialValue: sessionManager.reminderInterval)
+        _reminderCount = State(initialValue: sessionManager.reminderCount)
+        _groups = State(initialValue: sessionManager.groups)
+    }
+
+    var body: some View {
+        Form {
+            Section("Alerts") {
+                Toggle("Notification", isOn: $notificationEnabled)
+                    .onChange(of: notificationEnabled) { new in
+                        sessionManager.notificationEnabled = new
+                    }
+                Toggle("Sound", isOn: $soundEnabled)
+                    .onChange(of: soundEnabled) { new in
+                        sessionManager.soundEnabled = new
+                    }
+                Toggle("Voice", isOn: $voiceEnabled)
+                    .onChange(of: voiceEnabled) { new in
+                        sessionManager.voiceEnabled = new
+                    }
+            }
+
+            Section("Reminders") {
+                Toggle("Enabled", isOn: $reminderEnabled)
+                    .onChange(of: reminderEnabled) { new in
+                        sessionManager.reminderEnabled = new
+                    }
+
+                Picker("Interval", selection: $reminderInterval) {
+                    Text("30 sec").tag(30)
+                    Text("1 min").tag(60)
+                    Text("2 min").tag(120)
+                    Text("5 min").tag(300)
+                }
+                .onChange(of: reminderInterval) { new in
+                    sessionManager.reminderInterval = new
+                }
+
+                Picker("Count", selection: $reminderCount) {
+                    Text("1").tag(1)
+                    Text("2").tag(2)
+                    Text("3").tag(3)
+                    Text("5").tag(5)
+                    Text("∞ Infinite").tag(0)
+                }
+                .onChange(of: reminderCount) { new in
+                    sessionManager.reminderCount = new
+                }
+            }
+
+            Section("Groups") {
+                ForEach(groups.sorted { $0.order < $1.order }, id: \.id) { group in
+                    HStack {
+                        Circle()
+                            .fill(Color(hex: group.colorHex) ?? .gray)
+                            .frame(width: 12, height: 12)
+                        Text(group.name)
+                        Spacer()
+                        Button(action: { deleteGroup(group) }) {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Button("Add Group...") {
+                    showingAddGroup = true
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .sheet(isPresented: $showingAddGroup) {
+            VStack(spacing: 16) {
+                Text("New Group")
+                    .font(.headline)
+
+                TextField("Name", text: $newGroupName)
+                    .textFieldStyle(.roundedBorder)
+
+                Picker("Color", selection: $newGroupColor) {
+                    ForEach(SessionGroup.availableColors, id: \.hex) { color in
+                        HStack {
+                            Circle()
+                                .fill(Color(hex: color.hex) ?? .gray)
+                                .frame(width: 12, height: 12)
+                            Text(color.name)
+                        }
+                        .tag(color.hex)
+                    }
+                }
+
+                HStack {
+                    Button("Cancel") {
+                        showingAddGroup = false
+                        newGroupName = ""
+                    }
+                    Spacer()
+                    Button("Create") {
+                        if !newGroupName.isEmpty {
+                            _ = sessionManager.createGroup(name: newGroupName, colorHex: newGroupColor)
+                            groups = sessionManager.groups
+                            newGroupName = ""
+                            showingAddGroup = false
+                        }
+                    }
+                    .disabled(newGroupName.isEmpty)
+                }
+            }
+            .padding()
+            .frame(width: 300)
+        }
+    }
+
+    func deleteGroup(_ group: SessionGroup) {
+        sessionManager.deleteGroup(id: group.id)
+        groups = sessionManager.groups
+    }
+}
+
 // MARK: - App Delegate
 
-class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     var statusItem: NSStatusItem!
     var sessionManager: SessionManager!
+    var popover: NSPopover!
+    var viewModel: SessionsViewModel!
+    var settingsWindow: NSWindow?
+    var eventMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Set notification delegate FIRST
@@ -31,13 +523,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Initialize session manager
         sessionManager = SessionManager.shared
-        sessionManager.onSessionsChanged = { [weak self] in
-            DispatchQueue.main.async {
-                self?.updateMenu()
-            }
-        }
 
-        // Setup menu bar (needs sessionManager to be initialized)
+        // Setup view model
+        viewModel = SessionsViewModel()
+        viewModel.appDelegate = self
+
+        // Setup popover
+        popover = NSPopover()
+        popover.contentSize = NSSize(width: 280, height: 400)
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: SessionsPopoverView(viewModel: viewModel))
+
+        // Setup menu bar
         setupMenuBar()
 
         // Start monitoring
@@ -74,666 +571,64 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "bell.badge", accessibilityDescription: "Beacon")
             button.image?.isTemplate = true
+            button.action = #selector(togglePopover)
+            button.target = self
         }
 
-        updateMenu()
-    }
-
-    func updateMenu() {
-        let menu = NSMenu()
-        menu.delegate = self
-
-        // Header
-        let headerItem = NSMenuItem(title: "Beacon - Claude Sessions", action: nil, keyEquivalent: "")
-        headerItem.isEnabled = false
-        menu.addItem(headerItem)
-        menu.addItem(NSMenuItem.separator())
-
-        // Only show running sessions, grouped by their group
-        let runningSessions = sessionManager.sessions.filter { $0.status == .running }
-
-        if runningSessions.isEmpty {
-            let emptyItem = NSMenuItem(title: "No running sessions", action: nil, keyEquivalent: "")
-            emptyItem.isEnabled = false
-            menu.addItem(emptyItem)
-        } else {
-            // Group sessions by their group
-            let sortedGroups = sessionManager.groups.sorted { $0.order < $1.order }
-
-            // Track duplicates to add suffixes
-            var nameCounts: [String: Int] = [:]
-            var nameIndices: [String: Int] = [:]
-
-            // First pass: count occurrences across all sessions
-            for session in runningSessions {
-                let key = "\(session.terminalInfo)|\(session.projectName)"
-                nameCounts[key, default: 0] += 1
-            }
-
-            // Show grouped sessions first
-            for group in sortedGroups {
-                let groupSessions = runningSessions
-                    .filter { $0.groupId == group.id }
-                    .sorted { $0.createdAt > $1.createdAt }
-
-                if !groupSessions.isEmpty {
-                    // Group header
-                    let headerItem = NSMenuItem(title: "● \(group.name)", action: nil, keyEquivalent: "")
-                    headerItem.isEnabled = false
-                    if let color = NSColor(hex: group.colorHex) {
-                        headerItem.attributedTitle = createColoredGroupHeader(group.name, color: color)
-                    }
-                    menu.addItem(headerItem)
-
-                    // Sessions in this group
-                    for session in groupSessions {
-                        let key = "\(session.terminalInfo)|\(session.projectName)"
-                        let count = nameCounts[key] ?? 1
-                        var suffix = ""
-                        if count > 1 {
-                            nameIndices[key, default: 0] += 1
-                            suffix = " #\(nameIndices[key]!)"
-                        }
-                        let item = createSessionMenuItem(session, suffix: suffix)
-                        menu.addItem(item)
-                    }
-                }
-            }
-
-            // Show ungrouped sessions
-            let ungroupedSessions = runningSessions
-                .filter { $0.groupId == nil }
-                .sorted { $0.createdAt > $1.createdAt }
-
-            if !ungroupedSessions.isEmpty {
-                // Only show header if there are also grouped sessions
-                if runningSessions.contains(where: { $0.groupId != nil }) {
-                    let ungroupedHeader = NSMenuItem(title: "○ Ungrouped", action: nil, keyEquivalent: "")
-                    ungroupedHeader.isEnabled = false
-                    menu.addItem(ungroupedHeader)
-                }
-
-                for session in ungroupedSessions {
-                    let key = "\(session.terminalInfo)|\(session.projectName)"
-                    let count = nameCounts[key] ?? 1
-                    var suffix = ""
-                    if count > 1 {
-                        nameIndices[key, default: 0] += 1
-                        suffix = " #\(nameIndices[key]!)"
-                    }
-                    let item = createSessionMenuItem(session, suffix: suffix)
-                    menu.addItem(item)
-                }
-            }
-        }
-
-        // Actions
-        menu.addItem(NSMenuItem.separator())
-
-        let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refresh), keyEquivalent: "r")
-        refreshItem.target = self
-        menu.addItem(refreshItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        // Settings submenu
-        let settingsItem = NSMenuItem(title: "⚙️ Settings", action: nil, keyEquivalent: "")
-        let settingsSubmenu = NSMenu()
-
-        // Alert toggles
-        let alertHeader = NSMenuItem(title: "Alerts", action: nil, keyEquivalent: "")
-        alertHeader.isEnabled = false
-        settingsSubmenu.addItem(alertHeader)
-
-        let notificationItem = NSMenuItem(title: "Notification", action: #selector(toggleNotification), keyEquivalent: "")
-        notificationItem.target = self
-        notificationItem.state = sessionManager.notificationEnabled ? .on : .off
-        settingsSubmenu.addItem(notificationItem)
-
-        let soundItem = NSMenuItem(title: "Sound", action: #selector(toggleSound), keyEquivalent: "")
-        soundItem.target = self
-        soundItem.state = sessionManager.soundEnabled ? .on : .off
-        settingsSubmenu.addItem(soundItem)
-
-        let voiceItem = NSMenuItem(title: "Voice", action: #selector(toggleVoice), keyEquivalent: "")
-        voiceItem.target = self
-        voiceItem.state = sessionManager.voiceEnabled ? .on : .off
-        settingsSubmenu.addItem(voiceItem)
-
-        // Pronunciation Rules submenu
-        let pronunciationItem = NSMenuItem(title: "Pronunciation Rules", action: nil, keyEquivalent: "")
-        let pronunciationSubmenu = NSMenu()
-
-        if sessionManager.pronunciationRules.isEmpty {
-            let emptyItem = NSMenuItem(title: "No rules defined", action: nil, keyEquivalent: "")
-            emptyItem.isEnabled = false
-            pronunciationSubmenu.addItem(emptyItem)
-        } else {
-            for (pattern, pronunciation) in sessionManager.pronunciationRules.sorted(by: { $0.key < $1.key }) {
-                let ruleItem = NSMenuItem(title: "\(pattern) → \(pronunciation)", action: nil, keyEquivalent: "")
-                let ruleSubmenu = NSMenu()
-
-                let removeItem = NSMenuItem(title: "Remove", action: #selector(removePronunciationRule(_:)), keyEquivalent: "")
-                removeItem.target = self
-                removeItem.representedObject = pattern
-                ruleSubmenu.addItem(removeItem)
-
-                ruleItem.submenu = ruleSubmenu
-                pronunciationSubmenu.addItem(ruleItem)
-            }
-        }
-
-        pronunciationSubmenu.addItem(NSMenuItem.separator())
-        let addRuleItem = NSMenuItem(title: "Add Rule...", action: #selector(addPronunciationRule), keyEquivalent: "")
-        addRuleItem.target = self
-        pronunciationSubmenu.addItem(addRuleItem)
-
-        pronunciationItem.submenu = pronunciationSubmenu
-        settingsSubmenu.addItem(pronunciationItem)
-
-        settingsSubmenu.addItem(NSMenuItem.separator())
-
-        // Notification status and test
-        UNUserNotificationCenter.current().getNotificationSettings { settings in
-            DispatchQueue.main.async {
-                let status: String
-                switch settings.authorizationStatus {
-                case .authorized: status = "✓ Enabled"
-                case .denied: status = "✗ Disabled"
-                case .notDetermined: status = "? Not Set"
-                case .provisional: status = "~ Provisional"
-                case .ephemeral: status = "○ Ephemeral"
-                @unknown default: status = "?"
-                }
-
-                let statusItem = NSMenuItem(title: "Notifications: \(status)", action: nil, keyEquivalent: "")
-                statusItem.isEnabled = false
-                settingsSubmenu.insertItem(statusItem, at: settingsSubmenu.items.count - 1)
-            }
-        }
-
-        let testNotificationItem = NSMenuItem(title: "Test Notification", action: #selector(testNotification), keyEquivalent: "")
-        testNotificationItem.target = self
-        settingsSubmenu.addItem(testNotificationItem)
-
-        let openNotificationSettingsItem = NSMenuItem(title: "Open Notification Settings...", action: #selector(openNotificationSettings), keyEquivalent: "")
-        openNotificationSettingsItem.target = self
-        settingsSubmenu.addItem(openNotificationSettingsItem)
-
-        settingsSubmenu.addItem(NSMenuItem.separator())
-
-        // Max sessions to show submenu
-        let maxRecentItem = NSMenuItem(title: "Max Sessions", action: nil, keyEquivalent: "")
-        let maxRecentSubmenu = NSMenu()
-
-        for count in [5, 10, 20, 50] {
-            let countItem = NSMenuItem(title: "\(count)", action: #selector(setMaxRecent(_:)), keyEquivalent: "")
-            countItem.target = self
-            countItem.representedObject = count
-            if sessionManager.maxRecentSessions == count {
-                countItem.state = .on
-            }
-            maxRecentSubmenu.addItem(countItem)
-        }
-        maxRecentItem.submenu = maxRecentSubmenu
-        settingsSubmenu.addItem(maxRecentItem)
-
-        settingsSubmenu.addItem(NSMenuItem.separator())
-
-        // Reminder settings
-        let reminderHeader = NSMenuItem(title: "Reminders", action: nil, keyEquivalent: "")
-        reminderHeader.isEnabled = false
-        settingsSubmenu.addItem(reminderHeader)
-
-        let reminderEnabledItem = NSMenuItem(title: "Enabled", action: #selector(toggleReminder), keyEquivalent: "")
-        reminderEnabledItem.target = self
-        reminderEnabledItem.state = sessionManager.reminderEnabled ? .on : .off
-        settingsSubmenu.addItem(reminderEnabledItem)
-
-        // Reminder interval submenu
-        let reminderIntervalItem = NSMenuItem(title: "Interval", action: nil, keyEquivalent: "")
-        let reminderIntervalSubmenu = NSMenu()
-
-        let intervals = [(30, "30 sec"), (60, "1 min"), (120, "2 min"), (300, "5 min")]
-        for (seconds, label) in intervals {
-            let item = NSMenuItem(title: label, action: #selector(setReminderInterval(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = seconds
-            if sessionManager.reminderInterval == seconds {
-                item.state = .on
-            }
-            reminderIntervalSubmenu.addItem(item)
-        }
-        reminderIntervalItem.submenu = reminderIntervalSubmenu
-        settingsSubmenu.addItem(reminderIntervalItem)
-
-        // Reminder count submenu
-        let reminderCountItem = NSMenuItem(title: "Count", action: nil, keyEquivalent: "")
-        let reminderCountSubmenu = NSMenu()
-
-        for count in [1, 2, 3, 5, 10] {
-            let item = NSMenuItem(title: "\(count)", action: #selector(setReminderCount(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = count
-            if sessionManager.reminderCount == count {
-                item.state = .on
-            }
-            reminderCountSubmenu.addItem(item)
-        }
-
-        // Add Infinite option (value 0)
-        let infiniteItem = NSMenuItem(title: "∞ Infinite", action: #selector(setReminderCount(_:)), keyEquivalent: "")
-        infiniteItem.target = self
-        infiniteItem.representedObject = 0
-        if sessionManager.reminderCount == 0 {
-            infiniteItem.state = .on
-        }
-        reminderCountSubmenu.addItem(infiniteItem)
-
-        reminderCountItem.submenu = reminderCountSubmenu
-        settingsSubmenu.addItem(reminderCountItem)
-
-        settingsSubmenu.addItem(NSMenuItem.separator())
-
-        // Groups management
-        let groupsHeader = NSMenuItem(title: "Groups", action: nil, keyEquivalent: "")
-        groupsHeader.isEnabled = false
-        settingsSubmenu.addItem(groupsHeader)
-
-        // List existing groups with edit options
-        if sessionManager.groups.isEmpty {
-            let noGroupsItem = NSMenuItem(title: "No groups defined", action: nil, keyEquivalent: "")
-            noGroupsItem.isEnabled = false
-            settingsSubmenu.addItem(noGroupsItem)
-        } else {
-            for group in sessionManager.groups.sorted(by: { $0.order < $1.order }) {
-                let groupMenuItem = NSMenuItem(title: "● \(group.name)", action: nil, keyEquivalent: "")
-                if let color = NSColor(hex: group.colorHex) {
-                    groupMenuItem.attributedTitle = createColoredTitle("● \(group.name)", color: color)
-                }
-
-                let groupEditSubmenu = NSMenu()
-
-                // Group alerts submenu
-                let groupAlertsItem = NSMenuItem(title: "Alerts", action: nil, keyEquivalent: "")
-                let groupAlertsSubmenu = NSMenu()
-
-                groupAlertsSubmenu.addItem(createGroupAlertToggleItem(
-                    label: "Notification",
-                    groupId: group.id,
-                    currentOverride: group.notificationOverride,
-                    globalValue: sessionManager.notificationEnabled,
-                    action: #selector(setGroupNotification(_:))
-                ))
-
-                groupAlertsSubmenu.addItem(createGroupAlertToggleItem(
-                    label: "Sound",
-                    groupId: group.id,
-                    currentOverride: group.soundOverride,
-                    globalValue: sessionManager.soundEnabled,
-                    action: #selector(setGroupSound(_:))
-                ))
-
-                groupAlertsSubmenu.addItem(createGroupAlertToggleItem(
-                    label: "Voice",
-                    groupId: group.id,
-                    currentOverride: group.voiceOverride,
-                    globalValue: sessionManager.voiceEnabled,
-                    action: #selector(setGroupVoice(_:))
-                ))
-
-                groupAlertsSubmenu.addItem(createGroupAlertToggleItem(
-                    label: "Reminder",
-                    groupId: group.id,
-                    currentOverride: group.reminderOverride,
-                    globalValue: sessionManager.reminderEnabled,
-                    action: #selector(setGroupReminder(_:))
-                ))
-
-                groupAlertsItem.submenu = groupAlertsSubmenu
-                groupEditSubmenu.addItem(groupAlertsItem)
-
-                // Color submenu
-                let colorItem = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
-                let colorSubmenu = NSMenu()
-                for (colorName, colorHex) in SessionGroup.availableColors {
-                    let colorOption = NSMenuItem(title: "● \(colorName)", action: #selector(setGroupColor(_:)), keyEquivalent: "")
-                    colorOption.target = self
-                    colorOption.representedObject = ["groupId": group.id, "colorHex": colorHex]
-                    if let color = NSColor(hex: colorHex) {
-                        colorOption.attributedTitle = createColoredTitle("● \(colorName)", color: color)
-                    }
-                    if group.colorHex == colorHex {
-                        colorOption.state = .on
-                    }
-                    colorSubmenu.addItem(colorOption)
-                }
-
-                colorSubmenu.addItem(NSMenuItem.separator())
-
-                // Custom color option
-                let customColorItem = NSMenuItem(title: "Custom...", action: #selector(setCustomGroupColor(_:)), keyEquivalent: "")
-                customColorItem.target = self
-                customColorItem.representedObject = group.id
-                // Check if current color is custom (not in predefined list)
-                let isCustomColor = !SessionGroup.availableColors.contains { $0.hex == group.colorHex }
-                if isCustomColor {
-                    // Show current custom color
-                    let currentColorItem = NSMenuItem(title: "● Current: \(group.colorHex)", action: nil, keyEquivalent: "")
-                    if let color = NSColor(hex: group.colorHex) {
-                        currentColorItem.attributedTitle = createColoredTitle("● Current: \(group.colorHex)", color: color)
-                    }
-                    currentColorItem.state = .on
-                    currentColorItem.isEnabled = false
-                    colorSubmenu.addItem(currentColorItem)
-                }
-                colorSubmenu.addItem(customColorItem)
-
-                colorItem.submenu = colorSubmenu
-                groupEditSubmenu.addItem(colorItem)
-
-                groupEditSubmenu.addItem(NSMenuItem.separator())
-
-                // Reorder controls
-                let sortedGroups = sessionManager.groups.sorted { $0.order < $1.order }
-                let groupIndex = sortedGroups.firstIndex { $0.id == group.id } ?? 0
-
-                let moveUpItem = NSMenuItem(title: "Move Up", action: #selector(moveGroupUp(_:)), keyEquivalent: "")
-                moveUpItem.target = self
-                moveUpItem.representedObject = group.id
-                moveUpItem.isEnabled = groupIndex > 0
-                groupEditSubmenu.addItem(moveUpItem)
-
-                let moveDownItem = NSMenuItem(title: "Move Down", action: #selector(moveGroupDown(_:)), keyEquivalent: "")
-                moveDownItem.target = self
-                moveDownItem.representedObject = group.id
-                moveDownItem.isEnabled = groupIndex < sortedGroups.count - 1
-                groupEditSubmenu.addItem(moveDownItem)
-
-                groupEditSubmenu.addItem(NSMenuItem.separator())
-
-                let renameItem = NSMenuItem(title: "Rename...", action: #selector(renameGroup(_:)), keyEquivalent: "")
-                renameItem.target = self
-                renameItem.representedObject = group.id
-                groupEditSubmenu.addItem(renameItem)
-
-                let deleteItem = NSMenuItem(title: "Delete", action: #selector(deleteGroup(_:)), keyEquivalent: "")
-                deleteItem.target = self
-                deleteItem.representedObject = group.id
-                groupEditSubmenu.addItem(deleteItem)
-
-                groupMenuItem.submenu = groupEditSubmenu
-                settingsSubmenu.addItem(groupMenuItem)
-            }
-        }
-
-        let addGroupItem = NSMenuItem(title: "Add Group...", action: #selector(addGroup), keyEquivalent: "")
-        addGroupItem.target = self
-        settingsSubmenu.addItem(addGroupItem)
-
-        settingsItem.submenu = settingsSubmenu
-        menu.addItem(settingsItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        // Hook management section
-        let hookManager = HookManager.shared
-        if hookManager.isHookInstalled {
-            let hookStatus = NSMenuItem(title: "✓ Hooks Installed", action: nil, keyEquivalent: "")
-            hookStatus.isEnabled = false
-            menu.addItem(hookStatus)
-
-            let reinstallItem = NSMenuItem(title: "Reinstall Hooks", action: #selector(reinstallHooks), keyEquivalent: "")
-            reinstallItem.target = self
-            menu.addItem(reinstallItem)
-
-            let uninstallItem = NSMenuItem(title: "Uninstall Hooks", action: #selector(uninstallHooks), keyEquivalent: "")
-            uninstallItem.target = self
-            menu.addItem(uninstallItem)
-        } else {
-            let installItem = NSMenuItem(title: "⚡ Install Hooks (Rich Alerts)", action: #selector(installHooks), keyEquivalent: "")
-            installItem.target = self
-            menu.addItem(installItem)
-        }
-
-        menu.addItem(NSMenuItem.separator())
-
-        let quitItem = NSMenuItem(title: "Quit Beacon", action: #selector(quit), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-
-        statusItem.menu = menu
-
-        // Update icon badge
+        // Update icon based on running sessions
         updateIconBadge()
-    }
 
-    func formatElapsedTime(_ date: Date) -> String {
-        let elapsed = Int(Date().timeIntervalSince(date))
-        if elapsed < 60 {
-            return "\(elapsed)s"
-        } else if elapsed < 3600 {
-            return "\(elapsed / 60)m"
-        } else {
-            return "\(elapsed / 3600)h"
-        }
-    }
-
-    func createColoredTitle(_ text: String, color: NSColor) -> NSAttributedString {
-        let attributes: [NSAttributedString.Key: Any] = [
-            .foregroundColor: color
-        ]
-        // Color only the bullet
-        let attributedString = NSMutableAttributedString(string: text)
-        if let bulletRange = text.range(of: "●") {
-            let nsRange = NSRange(bulletRange, in: text)
-            attributedString.addAttributes(attributes, range: nsRange)
-        }
-        return attributedString
-    }
-
-    func createColoredGroupHeader(_ name: String, color: NSColor) -> NSAttributedString {
-        let bulletAttributes: [NSAttributedString.Key: Any] = [
-            .foregroundColor: color,
-            .font: NSFont.menuFont(ofSize: 0)
-        ]
-        let textAttributes: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.secondaryLabelColor,
-            .font: NSFont.menuFont(ofSize: 0)
-        ]
-
-        let attributedString = NSMutableAttributedString()
-        attributedString.append(NSAttributedString(string: "● ", attributes: bulletAttributes))
-        attributedString.append(NSAttributedString(string: name, attributes: textAttributes))
-        return attributedString
-    }
-
-    func createAlertToggleItem(label: String, sessionId: String, currentOverride: Bool?, globalValue: Bool, action: Selector) -> NSMenuItem {
-        let toggleItem = NSMenuItem(title: label, action: nil, keyEquivalent: "")
-        let toggleSubmenu = NSMenu()
-
-        let globalLabel = globalValue ? "Global (On)" : "Global (Off)"
-        let globalItem = NSMenuItem(title: globalLabel, action: action, keyEquivalent: "")
-        globalItem.target = self
-        globalItem.representedObject = ["sessionId": sessionId, "value": NSNull()]
-        if currentOverride == nil {
-            globalItem.state = .on
-        }
-        toggleSubmenu.addItem(globalItem)
-
-        let onItem = NSMenuItem(title: "On", action: action, keyEquivalent: "")
-        onItem.target = self
-        onItem.representedObject = ["sessionId": sessionId, "value": true]
-        if currentOverride == true {
-            onItem.state = .on
-        }
-        toggleSubmenu.addItem(onItem)
-
-        let offItem = NSMenuItem(title: "Off", action: action, keyEquivalent: "")
-        offItem.target = self
-        offItem.representedObject = ["sessionId": sessionId, "value": false]
-        if currentOverride == false {
-            offItem.state = .on
-        }
-        toggleSubmenu.addItem(offItem)
-
-        toggleItem.submenu = toggleSubmenu
-        return toggleItem
-    }
-
-    func createGroupAlertToggleItem(label: String, groupId: String, currentOverride: Bool?, globalValue: Bool, action: Selector) -> NSMenuItem {
-        let toggleItem = NSMenuItem(title: label, action: nil, keyEquivalent: "")
-        let toggleSubmenu = NSMenu()
-
-        let globalLabel = globalValue ? "Global (On)" : "Global (Off)"
-        let globalItem = NSMenuItem(title: globalLabel, action: action, keyEquivalent: "")
-        globalItem.target = self
-        globalItem.representedObject = ["groupId": groupId, "value": NSNull()]
-        if currentOverride == nil {
-            globalItem.state = .on
-        }
-        toggleSubmenu.addItem(globalItem)
-
-        let onItem = NSMenuItem(title: "On", action: action, keyEquivalent: "")
-        onItem.target = self
-        onItem.representedObject = ["groupId": groupId, "value": true]
-        if currentOverride == true {
-            onItem.state = .on
-        }
-        toggleSubmenu.addItem(onItem)
-
-        let offItem = NSMenuItem(title: "Off", action: action, keyEquivalent: "")
-        offItem.target = self
-        offItem.representedObject = ["groupId": groupId, "value": false]
-        if currentOverride == false {
-            offItem.state = .on
-        }
-        toggleSubmenu.addItem(offItem)
-
-        toggleItem.submenu = toggleSubmenu
-        return toggleItem
-    }
-
-    func createSessionMenuItem(_ session: ClaudeSession, suffix: String = "") -> NSMenuItem {
-        // Running sessions show filled bullet, elapsed time
-        let statusIndicator = "●"
-        let timeContext = " (\(formatElapsedTime(session.createdAt)))"
-
-        let title = "  \(statusIndicator) \(session.terminalInfo) · \(session.projectName)\(suffix)\(timeContext)"
-
-        // No action on main item - clicking opens submenu, menu stays open
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.representedObject = session.id
-
-        // Add submenu for actions
-        let submenu = NSMenu()
-
-        // Show working directory for context
-        let cwdItem = NSMenuItem(title: session.workingDirectory, action: nil, keyEquivalent: "")
-        cwdItem.isEnabled = false
-        submenu.addItem(cwdItem)
-        submenu.addItem(NSMenuItem.separator())
-
-        // Only show "Show" for non-background sessions
-        if session.terminalInfo != "Background" {
-            let showItem = NSMenuItem(title: "Show", action: #selector(showSession(_:)), keyEquivalent: "")
-            showItem.target = self
-            showItem.representedObject = session.id
-            submenu.addItem(showItem)
-        }
-
-        // Show kill option for running sessions
-        if session.status == .running {
-            let killItem = NSMenuItem(title: "Kill Process", action: #selector(killSession(_:)), keyEquivalent: "")
-            killItem.target = self
-            killItem.representedObject = session.id
-            submenu.addItem(killItem)
-        }
-
-        submenu.addItem(NSMenuItem.separator())
-
-        // Session-specific settings submenu
-        let sessionSettingsItem = NSMenuItem(title: "Session Alerts", action: nil, keyEquivalent: "")
-        let sessionSettingsSubmenu = NSMenu()
-
-        sessionSettingsSubmenu.addItem(createAlertToggleItem(
-            label: "Notification",
-            sessionId: session.id,
-            currentOverride: session.notificationOverride,
-            globalValue: sessionManager.notificationEnabled,
-            action: #selector(setSessionNotification(_:))
-        ))
-
-        sessionSettingsSubmenu.addItem(createAlertToggleItem(
-            label: "Sound",
-            sessionId: session.id,
-            currentOverride: session.soundOverride,
-            globalValue: sessionManager.soundEnabled,
-            action: #selector(setSessionSound(_:))
-        ))
-
-        sessionSettingsSubmenu.addItem(createAlertToggleItem(
-            label: "Voice",
-            sessionId: session.id,
-            currentOverride: session.voiceOverride,
-            globalValue: sessionManager.voiceEnabled,
-            action: #selector(setSessionVoice(_:))
-        ))
-
-        sessionSettingsSubmenu.addItem(createAlertToggleItem(
-            label: "Reminder",
-            sessionId: session.id,
-            currentOverride: session.reminderOverride,
-            globalValue: sessionManager.reminderEnabled,
-            action: #selector(setSessionReminder(_:))
-        ))
-
-        sessionSettingsItem.submenu = sessionSettingsSubmenu
-        submenu.addItem(sessionSettingsItem)
-
-        // Group assignment submenu
-        let groupItem = NSMenuItem(title: "Group", action: nil, keyEquivalent: "")
-        let groupSubmenu = NSMenu()
-
-        // No Group option
-        let noGroupItem = NSMenuItem(title: "None", action: #selector(setSessionGroupAction(_:)), keyEquivalent: "")
-        noGroupItem.target = self
-        noGroupItem.representedObject = ["sessionId": session.id, "groupId": NSNull()]
-        if session.groupId == nil {
-            noGroupItem.state = .on
-        }
-        groupSubmenu.addItem(noGroupItem)
-
-        // Existing groups
-        if !sessionManager.groups.isEmpty {
-            groupSubmenu.addItem(NSMenuItem.separator())
-            for group in sessionManager.groups.sorted(by: { $0.order < $1.order }) {
-                let groupMenuItem = NSMenuItem(title: "● \(group.name)", action: #selector(setSessionGroupAction(_:)), keyEquivalent: "")
-                groupMenuItem.target = self
-                groupMenuItem.representedObject = ["sessionId": session.id, "groupId": group.id]
-                if let color = NSColor(hex: group.colorHex) {
-                    groupMenuItem.attributedTitle = createColoredTitle("● \(group.name)", color: color)
-                }
-                if session.groupId == group.id {
-                    groupMenuItem.state = .on
-                }
-                groupSubmenu.addItem(groupMenuItem)
+        // Listen for session changes
+        sessionManager.onSessionsChanged = { [weak self] in
+            DispatchQueue.main.async {
+                self?.updateIconBadge()
+                self?.viewModel.refresh()
             }
         }
+    }
 
-        groupItem.submenu = groupSubmenu
-        submenu.addItem(groupItem)
+    @objc func togglePopover() {
+        if popover.isShown {
+            closePopover()
+        } else {
+            showPopover()
+        }
+    }
 
-        submenu.addItem(NSMenuItem.separator())
+    func showPopover() {
+        if let button = statusItem.button {
+            viewModel.refresh()
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
 
-        let unlistItem = NSMenuItem(title: "Unlist", action: #selector(removeSession(_:)), keyEquivalent: "")
-        unlistItem.target = self
-        unlistItem.representedObject = session.id
-        submenu.addItem(unlistItem)
+            // Close popover when clicking outside
+            eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+                self?.closePopover()
+            }
+        }
+    }
 
-        item.submenu = submenu
+    func closePopover() {
+        popover.performClose(nil)
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+    }
 
-        return item
+    func openSettingsWindow() {
+        closePopover()
+
+        if settingsWindow == nil {
+            let settingsView = SettingsView(sessionManager: sessionManager)
+            let hostingController = NSHostingController(rootView: settingsView)
+            settingsWindow = NSWindow(contentViewController: hostingController)
+            settingsWindow?.title = "Beacon Settings"
+            settingsWindow?.styleMask = [.titled, .closable, .resizable]
+            settingsWindow?.setContentSize(NSSize(width: 400, height: 500))
+            settingsWindow?.center()
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func updateIconBadge() {
@@ -751,316 +646,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     // MARK: - Actions
 
-    @objc func showSession(_ sender: NSMenuItem) {
-        guard let sessionId = sender.representedObject as? String else { return }
-        sessionManager.navigateToSession(id: sessionId)
-        // Only acknowledge completed sessions, not running ones
-        if let session = sessionManager.sessions.first(where: { $0.id == sessionId }),
-           session.status == .completed {
-            sessionManager.acknowledgeSession(id: sessionId)
-        }
-    }
-
-    @objc func removeSession(_ sender: NSMenuItem) {
-        guard let sessionId = sender.representedObject as? String else { return }
-        sessionManager.removeSession(id: sessionId)
-    }
-
-    @objc func killSession(_ sender: NSMenuItem) {
-        guard let sessionId = sender.representedObject as? String else { return }
-        sessionManager.killSession(id: sessionId)
-    }
-
-    @objc func addPronunciationRule() {
-        let alert = NSAlert()
-        alert.messageText = "Add Pronunciation Rule"
-        alert.informativeText = "Enter the text pattern and how it should be pronounced."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Add")
-        alert.addButton(withTitle: "Cancel")
-
-        let stackView = NSStackView(frame: NSRect(x: 0, y: 0, width: 300, height: 60))
-        stackView.orientation = .vertical
-        stackView.spacing = 8
-
-        let patternField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        patternField.placeholderString = "Pattern (e.g., vitess)"
-
-        let pronunciationField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        pronunciationField.placeholderString = "Pronunciation (e.g., vee-tess)"
-
-        stackView.addArrangedSubview(patternField)
-        stackView.addArrangedSubview(pronunciationField)
-
-        alert.accessoryView = stackView
-
-        if alert.runModal() == .alertFirstButtonReturn {
-            let pattern = patternField.stringValue.trimmingCharacters(in: .whitespaces)
-            let pronunciation = pronunciationField.stringValue.trimmingCharacters(in: .whitespaces)
-
-            if !pattern.isEmpty && !pronunciation.isEmpty {
-                sessionManager.addPronunciationRule(pattern: pattern, pronunciation: pronunciation)
-                updateMenu()
-            }
-        }
-    }
-
-    @objc func removePronunciationRule(_ sender: NSMenuItem) {
-        guard let pattern = sender.representedObject as? String else { return }
-        sessionManager.removePronunciationRule(pattern: pattern)
-        updateMenu()
-    }
-
-    @objc func toggleNotification() {
-        sessionManager.notificationEnabled.toggle()
-        updateMenu()
-    }
-
-    @objc func toggleSound() {
-        sessionManager.soundEnabled.toggle()
-        updateMenu()
-    }
-
-    @objc func toggleVoice() {
-        sessionManager.voiceEnabled.toggle()
-        updateMenu()
-    }
-
-    @objc func setMaxRecent(_ sender: NSMenuItem) {
-        guard let count = sender.representedObject as? Int else { return }
-        sessionManager.maxRecentSessions = count
-        updateMenu()
-    }
-
-    @objc func toggleReminder() {
-        sessionManager.reminderEnabled.toggle()
-        updateMenu()
-    }
-
-    @objc func setReminderInterval(_ sender: NSMenuItem) {
-        guard let seconds = sender.representedObject as? Int else { return }
-        sessionManager.reminderInterval = seconds
-        updateMenu()
-    }
-
-    @objc func setReminderCount(_ sender: NSMenuItem) {
-        guard let count = sender.representedObject as? Int else { return }
-        sessionManager.reminderCount = count
-        updateMenu()
-    }
-
-    // MARK: - Session-Specific Settings Actions
-
-    @objc func setSessionNotification(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any],
-              let sessionId = info["sessionId"] as? String else { return }
-        let value = info["value"] as? Bool  // nil if NSNull
-        sessionManager.setSessionNotificationOverride(id: sessionId, enabled: value)
-    }
-
-    @objc func setSessionSound(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any],
-              let sessionId = info["sessionId"] as? String else { return }
-        let value = info["value"] as? Bool
-        sessionManager.setSessionSoundOverride(id: sessionId, enabled: value)
-    }
-
-    @objc func setSessionVoice(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any],
-              let sessionId = info["sessionId"] as? String else { return }
-        let value = info["value"] as? Bool
-        sessionManager.setSessionVoiceOverride(id: sessionId, enabled: value)
-    }
-
-    @objc func setSessionReminder(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any],
-              let sessionId = info["sessionId"] as? String else { return }
-        let value = info["value"] as? Bool
-        sessionManager.setSessionReminderOverride(id: sessionId, enabled: value)
-    }
-
-    @objc func setSessionGroupAction(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any],
-              let sessionId = info["sessionId"] as? String else { return }
-        let groupId = info["groupId"] as? String  // nil if NSNull
-        sessionManager.setSessionGroup(sessionId: sessionId, groupId: groupId)
-    }
-
-    // MARK: - Group Actions
-
-    @objc func addGroup() {
-        let alert = NSAlert()
-        alert.messageText = "Create New Group"
-        alert.informativeText = "Enter a name for the new group."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Create")
-        alert.addButton(withTitle: "Cancel")
-
-        let stackView = NSStackView(frame: NSRect(x: 0, y: 0, width: 300, height: 80))
-        stackView.orientation = .vertical
-        stackView.spacing = 8
-
-        let nameField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        nameField.placeholderString = "Group name"
-        stackView.addArrangedSubview(nameField)
-
-        // Color selector
-        let colorPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        for (colorName, colorHex) in SessionGroup.availableColors {
-            let item = NSMenuItem(title: colorName, action: nil, keyEquivalent: "")
-            item.representedObject = colorHex
-            colorPopup.menu?.addItem(item)
-        }
-        stackView.addArrangedSubview(colorPopup)
-
-        alert.accessoryView = stackView
-
-        if alert.runModal() == .alertFirstButtonReturn {
-            let name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
-            let colorHex = colorPopup.selectedItem?.representedObject as? String ?? "#808080"
-
-            if !name.isEmpty {
-                _ = sessionManager.createGroup(name: name, colorHex: colorHex)
-                updateMenu()
-            }
-        }
-    }
-
-    @objc func renameGroup(_ sender: NSMenuItem) {
-        guard let groupId = sender.representedObject as? String,
-              let group = sessionManager.groups.first(where: { $0.id == groupId }) else { return }
-
-        let alert = NSAlert()
-        alert.messageText = "Rename Group"
-        alert.informativeText = "Enter a new name for \"\(group.name)\"."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-
-        let nameField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        nameField.stringValue = group.name
-        alert.accessoryView = nameField
-
-        if alert.runModal() == .alertFirstButtonReturn {
-            let newName = nameField.stringValue.trimmingCharacters(in: .whitespaces)
-            if !newName.isEmpty {
-                sessionManager.updateGroup(id: groupId, name: newName)
-                updateMenu()
-            }
-        }
-    }
-
-    @objc func deleteGroup(_ sender: NSMenuItem) {
-        guard let groupId = sender.representedObject as? String,
-              let group = sessionManager.groups.first(where: { $0.id == groupId }) else { return }
-
-        let alert = NSAlert()
-        alert.messageText = "Delete Group"
-        alert.informativeText = "Are you sure you want to delete \"\(group.name)\"? Sessions in this group will become ungrouped."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
-
-        if alert.runModal() == .alertFirstButtonReturn {
-            sessionManager.deleteGroup(id: groupId)
-            updateMenu()
-        }
-    }
-
-    @objc func moveGroupUp(_ sender: NSMenuItem) {
-        guard let groupId = sender.representedObject as? String else { return }
-        sessionManager.moveGroupUp(id: groupId)
-        updateMenu()
-    }
-
-    @objc func moveGroupDown(_ sender: NSMenuItem) {
-        guard let groupId = sender.representedObject as? String else { return }
-        sessionManager.moveGroupDown(id: groupId)
-        updateMenu()
-    }
-
-    @objc func setGroupColor(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any],
-              let groupId = info["groupId"] as? String,
-              let colorHex = info["colorHex"] as? String else { return }
-        sessionManager.updateGroup(id: groupId, colorHex: colorHex)
-        updateMenu()
-    }
-
-    @objc func setCustomGroupColor(_ sender: NSMenuItem) {
-        guard let groupId = sender.representedObject as? String,
-              let group = sessionManager.groups.first(where: { $0.id == groupId }) else { return }
-
-        let alert = NSAlert()
-        alert.messageText = "Custom Color"
-        alert.informativeText = "Enter a HEX color code (e.g., #FF5733 or FF5733)."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Apply")
-        alert.addButton(withTitle: "Cancel")
-
-        let hexField = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        hexField.stringValue = group.colorHex
-        hexField.placeholderString = "#RRGGBB"
-        alert.accessoryView = hexField
-
-        if alert.runModal() == .alertFirstButtonReturn {
-            var hexInput = hexField.stringValue.trimmingCharacters(in: .whitespaces)
-            // Add # prefix if missing
-            if !hexInput.hasPrefix("#") {
-                hexInput = "#" + hexInput
-            }
-            // Validate hex color
-            if NSColor(hex: hexInput) != nil {
-                sessionManager.updateGroup(id: groupId, colorHex: hexInput.uppercased())
-                updateMenu()
-            } else {
-                let errorAlert = NSAlert()
-                errorAlert.messageText = "Invalid Color"
-                errorAlert.informativeText = "Please enter a valid HEX color code (e.g., #FF5733)."
-                errorAlert.alertStyle = .warning
-                errorAlert.addButton(withTitle: "OK")
-                errorAlert.runModal()
-            }
-        }
-    }
-
-    @objc func setGroupNotification(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any],
-              let groupId = info["groupId"] as? String else { return }
-        let value = info["value"] as? Bool
-        sessionManager.setGroupNotificationOverride(id: groupId, enabled: value)
-    }
-
-    @objc func setGroupSound(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any],
-              let groupId = info["groupId"] as? String else { return }
-        let value = info["value"] as? Bool
-        sessionManager.setGroupSoundOverride(id: groupId, enabled: value)
-    }
-
-    @objc func setGroupVoice(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any],
-              let groupId = info["groupId"] as? String else { return }
-        let value = info["value"] as? Bool
-        sessionManager.setGroupVoiceOverride(id: groupId, enabled: value)
-    }
-
-    @objc func setGroupReminder(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any],
-              let groupId = info["groupId"] as? String else { return }
-        let value = info["value"] as? Bool
-        sessionManager.setGroupReminderOverride(id: groupId, enabled: value)
-    }
-
-    // MARK: - NSMenuDelegate
-
-    func menuDidClose(_ menu: NSMenu) {
-        // Menu closed - no special handling needed
-    }
-
     @objc func refresh() {
-        // Scan must run on scanQueue for thread safety
         sessionManager.triggerScan()
+        viewModel.refresh()
     }
 
     @objc func testNotification() {
@@ -1140,26 +728,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     @objc func quit() {
         NSApplication.shared.terminate(nil)
-    }
-
-    // MARK: - Hook Management
-
-    @objc func installHooks() {
-        let result = HookManager.shared.installHooks()
-        showAlert(title: result.success ? "Success" : "Error", message: result.message)
-        updateMenu()
-    }
-
-    @objc func reinstallHooks() {
-        let result = HookManager.shared.installHooks()
-        showAlert(title: result.success ? "Success" : "Error", message: result.message)
-        updateMenu()
-    }
-
-    @objc func uninstallHooks() {
-        let result = HookManager.shared.uninstallHooks()
-        showAlert(title: result.success ? "Success" : "Error", message: result.message)
-        updateMenu()
     }
 
     func showAlert(title: String, message: String) {
