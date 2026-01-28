@@ -36,12 +36,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         completionHandler([.banner, .sound, .badge])
     }
 
-    // Handle notification click
+    // Handle notification click or action button
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         if let sessionId = response.notification.request.content.userInfo["sessionId"] as? String {
-            NSLog("Notification clicked for session: \(sessionId)")
-            sessionManager.navigateToSession(id: sessionId)
-            sessionManager.acknowledgeSession(id: sessionId)
+            // Handle both direct click and "Show" action button
+            if response.actionIdentifier == UNNotificationDefaultActionIdentifier ||
+               response.actionIdentifier == SessionManager.showActionId {
+                NSLog("Notification action for session: \(sessionId), action: \(response.actionIdentifier)")
+                sessionManager.navigateToSession(id: sessionId)
+                sessionManager.acknowledgeSession(id: sessionId)
+            }
         }
         completionHandler()
     }

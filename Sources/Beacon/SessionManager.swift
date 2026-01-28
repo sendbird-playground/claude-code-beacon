@@ -120,6 +120,7 @@ class SessionManager {
 
         loadSessions()
         loadSettings()
+        registerNotificationCategories()
         requestNotificationPermission()
         startHttpServer()
     }
@@ -1201,6 +1202,26 @@ class SessionManager {
 
     // MARK: - Notifications
 
+    static let notificationCategoryId = "SESSION_COMPLETED"
+    static let showActionId = "SHOW_SESSION"
+
+    func registerNotificationCategories() {
+        let showAction = UNNotificationAction(
+            identifier: SessionManager.showActionId,
+            title: "Show",
+            options: [.foreground]
+        )
+
+        let category = UNNotificationCategory(
+            identifier: SessionManager.notificationCategoryId,
+            actions: [showAction],
+            intentIdentifiers: [],
+            options: []
+        )
+
+        UNUserNotificationCenter.current().setNotificationCategories([category])
+    }
+
     func sendCompletionNotification(for session: ClaudeSession) {
         // Send macOS notification if enabled
         if notificationEnabled {
@@ -1209,6 +1230,7 @@ class SessionManager {
             content.body = "\(session.terminalInfo) · \(session.projectName)"
             content.sound = nil  // We handle sound separately
             content.userInfo = ["sessionId": session.id]
+            content.categoryIdentifier = SessionManager.notificationCategoryId
 
             let request = UNNotificationRequest(
                 identifier: session.id,
