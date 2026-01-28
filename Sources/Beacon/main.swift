@@ -207,6 +207,51 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         maxRecentItem.submenu = maxRecentSubmenu
         settingsSubmenu.addItem(maxRecentItem)
 
+        settingsSubmenu.addItem(NSMenuItem.separator())
+
+        // Reminder settings
+        let reminderHeader = NSMenuItem(title: "Reminders", action: nil, keyEquivalent: "")
+        reminderHeader.isEnabled = false
+        settingsSubmenu.addItem(reminderHeader)
+
+        let reminderEnabledItem = NSMenuItem(title: "Enabled", action: #selector(toggleReminder), keyEquivalent: "")
+        reminderEnabledItem.target = self
+        reminderEnabledItem.state = sessionManager.reminderEnabled ? .on : .off
+        settingsSubmenu.addItem(reminderEnabledItem)
+
+        // Reminder interval submenu
+        let reminderIntervalItem = NSMenuItem(title: "Interval", action: nil, keyEquivalent: "")
+        let reminderIntervalSubmenu = NSMenu()
+
+        let intervals = [(30, "30 sec"), (60, "1 min"), (120, "2 min"), (300, "5 min")]
+        for (seconds, label) in intervals {
+            let item = NSMenuItem(title: label, action: #selector(setReminderInterval(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = seconds
+            if sessionManager.reminderInterval == seconds {
+                item.state = .on
+            }
+            reminderIntervalSubmenu.addItem(item)
+        }
+        reminderIntervalItem.submenu = reminderIntervalSubmenu
+        settingsSubmenu.addItem(reminderIntervalItem)
+
+        // Reminder count submenu
+        let reminderCountItem = NSMenuItem(title: "Count", action: nil, keyEquivalent: "")
+        let reminderCountSubmenu = NSMenu()
+
+        for count in [1, 2, 3, 5, 10] {
+            let item = NSMenuItem(title: "\(count)", action: #selector(setReminderCount(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = count
+            if sessionManager.reminderCount == count {
+                item.state = .on
+            }
+            reminderCountSubmenu.addItem(item)
+        }
+        reminderCountItem.submenu = reminderCountSubmenu
+        settingsSubmenu.addItem(reminderCountItem)
+
         settingsItem.submenu = settingsSubmenu
         menu.addItem(settingsItem)
 
@@ -346,6 +391,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     @objc func setMaxRecent(_ sender: NSMenuItem) {
         guard let count = sender.representedObject as? Int else { return }
         sessionManager.maxRecentSessions = count
+        updateMenu()
+    }
+
+    @objc func toggleReminder() {
+        sessionManager.reminderEnabled.toggle()
+        updateMenu()
+    }
+
+    @objc func setReminderInterval(_ sender: NSMenuItem) {
+        guard let seconds = sender.representedObject as? Int else { return }
+        sessionManager.reminderInterval = seconds
+        updateMenu()
+    }
+
+    @objc func setReminderCount(_ sender: NSMenuItem) {
+        guard let count = sender.representedObject as? Int else { return }
+        sessionManager.reminderCount = count
         updateMenu()
     }
 

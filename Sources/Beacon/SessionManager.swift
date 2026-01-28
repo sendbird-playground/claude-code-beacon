@@ -111,6 +111,22 @@ class SessionManager {
         }
     }
 
+    // Reminder settings
+    var reminderEnabled: Bool = false {
+        didSet { saveSettings() }
+    }
+
+    var reminderInterval: Int = 60 {  // seconds
+        didSet { saveSettings() }
+    }
+
+    var reminderCount: Int = 3 {
+        didSet { saveSettings() }
+    }
+
+    // Track reminder counts per session
+    private var reminderCounts: [String: Int] = [:]
+
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let beaconDir = appSupport.appendingPathComponent("Beacon")
@@ -1246,6 +1262,11 @@ class SessionManager {
                     NSLog("Notification scheduled successfully for: \(session.projectName)")
                 }
             }
+
+            // Schedule reminders if enabled
+            if reminderEnabled {
+                scheduleReminders(for: session)
+            }
         }
 
         // Play sound if enabled
@@ -1259,6 +1280,46 @@ class SessionManager {
         }
     }
 
+    func scheduleReminders(for session: ClaudeSession) {
+        // Schedule multiple reminder notifications
+        for i in 1...reminderCount {
+            let content = UNMutableNotificationContent()
+            content.title = "Reminder: Task Completed"
+            content.body = "\(session.terminalInfo) · \(session.projectName)"
+            content.sound = .default
+            content.userInfo = ["sessionId": session.id, "isReminder": true]
+            content.categoryIdentifier = SessionManager.notificationCategoryId
+
+            let trigger = UNTimeIntervalNotificationTrigger(
+                timeInterval: TimeInterval(reminderInterval * i),
+                repeats: false
+            )
+
+            let request = UNNotificationRequest(
+                identifier: "\(session.id)-reminder-\(i)",
+                content: content,
+                trigger: trigger
+            )
+
+            UNUserNotificationCenter.current().add(request) { error in
+                if let error = error {
+                    NSLog("Failed to schedule reminder \(i): \(error)")
+                } else {
+                    NSLog("Reminder \(i) scheduled for \(self.reminderInterval * i)s")
+                }
+            }
+        }
+    }
+
+    func cancelReminders(for sessionId: String) {
+        // Cancel all reminders for this session
+        var identifiers: [String] = []
+        for i in 1...reminderCount {
+            identifiers.append("\(sessionId)-reminder-\(i)")
+        }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+
     func speakSummary(_ session: ClaudeSession) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/say")
@@ -1267,8 +1328,12 @@ class SessionManager {
     }
 
     func cancelNotifications(for sessionId: String) {
+        // Cancel main notification
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [sessionId])
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [sessionId])
+
+        // Cancel reminders
+        cancelReminders(for: sessionId)
     }
 
     func playAlertSound() {
@@ -1318,6 +1383,9 @@ class SessionManager {
         var soundEnabled: Bool = true
         var voiceEnabled: Bool = true
         var maxRecentSessions: Int = 10
+        var reminderEnabled: Bool = false
+        var reminderInterval: Int = 60
+        var reminderCount: Int = 3
     }
 
     func saveSettings() {
@@ -1326,7 +1394,10 @@ class SessionManager {
                 notificationEnabled: notificationEnabled,
                 soundEnabled: soundEnabled,
                 voiceEnabled: voiceEnabled,
-                maxRecentSessions: maxRecentSessions
+                maxRecentSessions: maxRecentSessions,
+                reminderEnabled: reminderEnabled,
+                reminderInterval: reminderInterval,
+                reminderCount: reminderCount
             )
             let data = try JSONEncoder().encode(settings)
             try data.write(to: settingsURL, options: .atomic)
@@ -1345,6 +1416,9 @@ class SessionManager {
             soundEnabled = settings.soundEnabled
             voiceEnabled = settings.voiceEnabled
             maxRecentSessions = settings.maxRecentSessions
+            reminderEnabled = settings.reminderEnabled
+            reminderInterval = settings.reminderInterval
+            reminderCount = settings.reminderCount
         } catch {
             print("Failed to load settings: \(error)")
         }
