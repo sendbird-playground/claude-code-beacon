@@ -6,6 +6,7 @@ import UserNotifications
 class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     var statusItem: NSStatusItem!
     var sessionManager: SessionManager!
+    var isMenuExpanded: Bool = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Set notification delegate FIRST
@@ -104,7 +105,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
             // Second pass: create menu items
             let maxToShow = sessionManager.maxRecentSessions
-            for session in sorted.prefix(maxToShow) {
+            let showAll = isMenuExpanded || sorted.count <= maxToShow
+            let sessionsToShow = showAll ? sorted : Array(sorted.prefix(maxToShow))
+
+            for session in sessionsToShow {
                 let key = "\(session.terminalInfo)|\(session.projectName)"
                 let count = nameCounts[key] ?? 1
                 var suffix = ""
@@ -116,26 +120,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 menu.addItem(item)
             }
 
-            // Show remaining sessions in expandable submenu
+            // Show expand/collapse option
             if sorted.count > maxToShow {
-                let remaining = Array(sorted.dropFirst(maxToShow))
-                let moreItem = NSMenuItem(title: "  ... and \(remaining.count) more", action: nil, keyEquivalent: "")
-                let moreSubmenu = NSMenu()
-
-                for session in remaining {
-                    let key = "\(session.terminalInfo)|\(session.projectName)"
-                    let count = nameCounts[key] ?? 1
-                    var suffix = ""
-                    if count > 1 {
-                        nameIndices[key, default: 0] += 1
-                        suffix = " #\(nameIndices[key]!)"
-                    }
-                    let item = createSessionMenuItem(session, suffix: suffix)
-                    moreSubmenu.addItem(item)
+                if isMenuExpanded {
+                    let lessItem = NSMenuItem(title: "  ▲ Show less", action: #selector(collapseMenu), keyEquivalent: "")
+                    lessItem.target = self
+                    menu.addItem(lessItem)
+                } else {
+                    let moreItem = NSMenuItem(title: "  ▼ ... and \(sorted.count - maxToShow) more", action: #selector(expandMenu), keyEquivalent: "")
+                    moreItem.target = self
+                    menu.addItem(moreItem)
                 }
-
-                moreItem.submenu = moreSubmenu
-                menu.addItem(moreItem)
             }
         }
 
@@ -433,6 +428,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     @objc func setReminderCount(_ sender: NSMenuItem) {
         guard let count = sender.representedObject as? Int else { return }
         sessionManager.reminderCount = count
+        reopenMenu()
+    }
+
+    @objc func expandMenu() {
+        isMenuExpanded = true
+        reopenMenu()
+    }
+
+    @objc func collapseMenu() {
+        isMenuExpanded = false
         reopenMenu()
     }
 
