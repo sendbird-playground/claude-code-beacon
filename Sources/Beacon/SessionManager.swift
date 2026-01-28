@@ -89,6 +89,7 @@ class SessionManager {
     private let settingsURL: URL
     private let scanQueue = DispatchQueue(label: "com.beacon.scanQueue")  // Serial queue to prevent race conditions
     private var httpListener: NWListener?
+    private var processMonitors: [Int32: DispatchSourceProcess] = [:]  // PID -> dispatch source for exit monitoring
 
     // Settings
     var notificationEnabled: Bool = true {
@@ -235,14 +236,42 @@ class SessionManager {
     }
 
     private func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if let error = error {
-                print("Notification permission error: \(error)")
+        let center = UNUserNotificationCenter.current()
+
+        // Check current authorization status first
+        center.getNotificationSettings { settings in
+            NSLog("Notification authorization status: \(settings.authorizationStatus.rawValue)")
+            NSLog("Alert setting: \(settings.alertSetting.rawValue)")
+            NSLog("Sound setting: \(settings.soundSetting.rawValue)")
+            NSLog("Badge setting: \(settings.badgeSetting.rawValue)")
+
+            switch settings.authorizationStatus {
+            case .notDetermined:
+                // Request permission
+                center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                    NSLog("Notification permission granted: \(granted)")
+                    if let error = error {
+                        NSLog("Notification permission error: \(error)")
+                    }
+                }
+            case .denied:
+                NSLog("Notifications are denied. Please enable in System Settings > Notifications > Beacon")
+            case .authorized, .provisional, .ephemeral:
+                NSLog("Notifications are authorized")
+            @unknown default:
+                break
             }
         }
     }
 
     // MARK: - Monitoring
+
+    /// Thread-safe method to trigger a scan from any thread
+    func triggerScan() {
+        scanQueue.async { [weak self] in
+            self?.scanForSessions()
+        }
+    }
 
     func startMonitoring() {
         // Defer initial scan to background to avoid blocking startup
@@ -250,9 +279,9 @@ class SessionManager {
             self?.scanForSessions()
         }
 
-        // Monitor every 2 seconds for new/completed sessions
+        // Monitor every 5 seconds for new sessions (termination is handled by process monitors)
         // Use serial scanQueue to prevent race conditions causing duplicate notifications
-        monitorTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+        monitorTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             self?.scanQueue.async {
                 self?.scanForSessions()
             }
@@ -265,6 +294,66 @@ class SessionManager {
             queue: .main
         ) { [weak self] notification in
             self?.handleAppActivation(notification)
+        }
+    }
+
+    /// Start monitoring a specific process for termination (immediate notification)
+    /// Must be called on scanQueue
+    private func startProcessExitMonitor(pid: Int32) {
+        // Skip if already monitoring this PID
+        guard processMonitors[pid] == nil else { return }
+
+        let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: scanQueue)
+
+        source.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            NSLog("Process \(pid) exited - triggering immediate refresh")
+            // Already on scanQueue, handle directly
+            self.handleProcessExitOnScanQueue(pid: pid)
+        }
+
+        // Don't modify dictionary in cancel handler - we do it in stop method
+        source.setCancelHandler { }
+
+        processMonitors[pid] = source
+        source.resume()
+        NSLog("Started exit monitor for PID \(pid)")
+    }
+
+    /// Handle immediate process exit notification
+    /// Must be called on scanQueue
+    private func handleProcessExitOnScanQueue(pid: Int32) {
+        // Find session with this PID and mark as completed
+        if let index = self.sessions.firstIndex(where: { $0.pid == pid && $0.status == .running }) {
+            self.sessions[index].status = .completed
+            self.sessions[index].completedAt = Date()
+
+            let session = self.sessions[index]
+            NSLog("Session marked completed via exit monitor: \(session.projectName)")
+
+            // Send notification (thread-safe)
+            self.sendCompletionNotification(for: session)
+            self.saveSessions()
+            self.trimOldSessions()
+
+            // UI update on main thread
+            DispatchQueue.main.async { [weak self] in
+                self?.onSessionsChanged?()
+            }
+        }
+
+        // Clean up the monitor (on scanQueue)
+        stopProcessExitMonitor(pid: pid)
+
+        // Remove from known PIDs
+        self.knownPids.remove(pid)
+    }
+
+    /// Stop monitoring a process
+    /// Must be called on scanQueue
+    private func stopProcessExitMonitor(pid: Int32) {
+        if let source = processMonitors.removeValue(forKey: pid) {
+            source.cancel()
         }
     }
 
@@ -306,6 +395,7 @@ class SessionManager {
 
     func scanForSessions() {
         let claudeProcesses = findClaudeProcesses()
+        var needsUIUpdate = false
 
         // Check for new processes
         for process in claudeProcesses {
@@ -322,46 +412,95 @@ class SessionManager {
                     // Try to find git root for better project name
                     let projectName = getProjectName(for: process.cwd, terminal: process.terminal)
 
+                    // Get PyCharm window name if this is a PyCharm session
+                    var pycharmWindow: String? = nil
+                    if process.terminal == "PyCharm" {
+                        pycharmWindow = getFrontmostPyCharmWindow()
+                    }
+
                     let session = ClaudeSession(
                         projectName: projectName,
                         terminalInfo: process.terminal,
                         workingDirectory: process.cwd,
                         status: .running,
-                        pid: process.pid
+                        pid: process.pid,
+                        weztermPane: process.weztermPane,
+                        ttyName: process.ttyName,
+                        pycharmWindow: pycharmWindow
                     )
                     sessions.insert(session, at: 0)
                     saveSessions()
-                    onSessionsChanged?()
+                    needsUIUpdate = true
+
+                    // Start monitoring this process for immediate exit notification
+                    startProcessExitMonitor(pid: process.pid)
                 }
             }
         }
 
         // Check for completed processes (running sessions whose PIDs no longer exist)
+        // This is a fallback in case process monitors miss something
         let runningPids = Set(claudeProcesses.map { $0.pid })
 
         for i in sessions.indices {
             if sessions[i].status == .running, let pid = sessions[i].pid {
                 if !runningPids.contains(pid) {
-                    // Process ended - mark as completed
+                    // Process ended - mark as completed (fallback if exit monitor didn't catch it)
                     sessions[i].status = .completed
                     sessions[i].completedAt = Date()
                     sendCompletionNotification(for: sessions[i])
                     saveSessions()
                     trimOldSessions()
-                    onSessionsChanged?()
+                    needsUIUpdate = true
+
+                    // Clean up monitor if it exists
+                    stopProcessExitMonitor(pid: pid)
                 }
             }
         }
 
-        // Clean up old PIDs
+        // Clean up old PIDs and monitors
+        let stalePids = knownPids.subtracting(runningPids)
+        for pid in stalePids {
+            stopProcessExitMonitor(pid: pid)
+        }
         knownPids = knownPids.intersection(runningPids)
         ignoredPids = ignoredPids.intersection(runningPids)
+
+        // UI updates must happen on main thread
+        if needsUIUpdate {
+            DispatchQueue.main.async { [weak self] in
+                self?.onSessionsChanged?()
+            }
+        }
     }
 
     struct ClaudeProcess {
         let pid: Int32
         let cwd: String
         let terminal: String
+        let ttyName: String?
+        let weztermPane: String?
+    }
+
+    func getFrontmostPyCharmWindow() -> String? {
+        let script = """
+            tell application "System Events"
+                tell process "pycharm"
+                    set frontWindowName to name of front window
+                    -- Extract project name (before " – ")
+                    set AppleScript's text item delimiters to " – "
+                    set projectName to first text item of frontWindowName
+                    return projectName
+                end tell
+            end tell
+            """
+        var error: NSDictionary?
+        if let appleScript = NSAppleScript(source: script),
+           let result = appleScript.executeAndReturnError(&error).stringValue {
+            return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
     }
 
     func getProjectName(for cwd: String, terminal: String) -> String {
@@ -480,7 +619,9 @@ class SessionManager {
                         // Get working directory for this PID
                         if let cwd = getProcessCwd(pid: pid) {
                             let terminal = getProcessTerminal(pid: pid)
-                            processes.append(ClaudeProcess(pid: pid, cwd: cwd, terminal: terminal))
+                            let ttyName = getProcessTty(pid: pid)
+                            let weztermPane = getWeztermPane(pid: pid)
+                            processes.append(ClaudeProcess(pid: pid, cwd: cwd, terminal: terminal, ttyName: ttyName, weztermPane: weztermPane))
                         }
                     }
                 }
@@ -515,6 +656,88 @@ class SessionManager {
             }
         } catch {
             // Ignore errors
+        }
+
+        return nil
+    }
+
+    func getProcessTty(pid: Int32) -> String? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/ps")
+        task.arguments = ["-p", "\(pid)", "-o", "tty="]
+
+        let pipe = Pipe()
+        task.standardOutput = pipe
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let tty = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !tty.isEmpty && tty != "??" {
+                return tty
+            }
+        } catch {
+            // Ignore
+        }
+        return nil
+    }
+
+    func getWeztermPane(pid: Int32) -> String? {
+        // Check if this is a WezTerm process by walking up the tree
+        var currentPid = pid
+        var isWezTerm = false
+
+        for _ in 0..<10 {
+            guard let ppid = getParentPid(currentPid), ppid > 1 else { break }
+            if let appName = getAppNameFromPid(ppid), appName == "WezTerm" {
+                isWezTerm = true
+                break
+            }
+            currentPid = ppid
+        }
+
+        if !isWezTerm {
+            return nil
+        }
+
+        // Get WezTerm pane list and find matching TTY
+        let tty = getProcessTty(pid: pid)
+        guard let tty = tty else { return nil }
+
+        let weztermPaths = ["/opt/homebrew/bin/wezterm", "/usr/local/bin/wezterm"]
+        var weztermPath = ""
+        for path in weztermPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                weztermPath = path
+                break
+            }
+        }
+
+        guard !weztermPath.isEmpty else { return nil }
+
+        let script = """
+            do shell script "\(weztermPath) cli list --format json"
+            """
+
+        var error: NSDictionary?
+        guard let appleScript = NSAppleScript(source: script),
+              let result = appleScript.executeAndReturnError(&error).stringValue,
+              let data = result.data(using: .utf8),
+              let panes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return nil
+        }
+
+        // Find pane with matching TTY
+        for pane in panes {
+            if let ttyName = pane["tty_name"] as? String {
+                if ttyName.contains(tty) {
+                    if let paneId = pane["pane_id"] as? Int {
+                        return String(paneId)
+                    }
+                }
+            }
         }
 
         return nil
@@ -738,7 +961,8 @@ class SessionManager {
             tell application "System Events"
                 tell process "pycharm"
                     repeat with w in windows
-                        if name of w starts with "\(windowName)" then
+                        set wName to name of w as text
+                        if wName contains "\(windowName)" then
                             tell application "PyCharm" to activate
                             perform action "AXRaise" of w
                             return
@@ -767,7 +991,8 @@ class SessionManager {
                 tell application "System Events"
                     tell process "pycharm"
                         repeat with w in windows
-                            if name of w starts with "\(term)" then
+                            set wName to name of w as text
+                            if wName contains "\(term)" then
                                 tell application "PyCharm" to activate
                                 perform action "AXRaise" of w
                                 return "found"
@@ -965,7 +1190,15 @@ class SessionManager {
                 content: content,
                 trigger: nil
             )
-            UNUserNotificationCenter.current().add(request)
+
+            NSLog("Sending notification for session: \(session.projectName)")
+            UNUserNotificationCenter.current().add(request) { error in
+                if let error = error {
+                    NSLog("Failed to deliver notification: \(error)")
+                } else {
+                    NSLog("Notification scheduled successfully for: \(session.projectName)")
+                }
+            }
         }
 
         // Play sound if enabled

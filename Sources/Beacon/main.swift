@@ -1,13 +1,17 @@
 import AppKit
+import UserNotifications
 
 // MARK: - App Delegate
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     var statusItem: NSStatusItem!
     var sessionManager: SessionManager!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Initialize session manager FIRST
+        // Set notification delegate FIRST
+        UNUserNotificationCenter.current().delegate = self
+
+        // Initialize session manager
         sessionManager = SessionManager.shared
         sessionManager.onSessionsChanged = { [weak self] in
             DispatchQueue.main.async {
@@ -21,7 +25,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Start monitoring
         sessionManager.startMonitoring()
 
-        print("Beacon is running in the menu bar")
+        NSLog("Beacon is running in the menu bar")
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    // Show notifications even when app is in foreground
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        NSLog("Will present notification: \(notification.request.identifier)")
+        completionHandler([.banner, .sound, .badge])
+    }
+
+    // Handle notification click
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        if let sessionId = response.notification.request.content.userInfo["sessionId"] as? String {
+            NSLog("Notification clicked for session: \(sessionId)")
+            sessionManager.navigateToSession(id: sessionId)
+            sessionManager.acknowledgeSession(id: sessionId)
+        }
+        completionHandler()
     }
 
     func setupMenuBar() {
@@ -141,6 +163,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         voiceItem.target = self
         voiceItem.state = sessionManager.voiceEnabled ? .on : .off
         settingsSubmenu.addItem(voiceItem)
+
+        settingsSubmenu.addItem(NSMenuItem.separator())
+
+        // Notification status and test
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                let status: String
+                switch settings.authorizationStatus {
+                case .authorized: status = "✓ Enabled"
+                case .denied: status = "✗ Disabled"
+                case .notDetermined: status = "? Not Set"
+                case .provisional: status = "~ Provisional"
+                case .ephemeral: status = "○ Ephemeral"
+                @unknown default: status = "?"
+                }
+
+                let statusItem = NSMenuItem(title: "Notifications: \(status)", action: nil, keyEquivalent: "")
+                statusItem.isEnabled = false
+                settingsSubmenu.insertItem(statusItem, at: settingsSubmenu.items.count - 1)
+            }
+        }
+
+        let testNotificationItem = NSMenuItem(title: "Test Notification", action: #selector(testNotification), keyEquivalent: "")
+        testNotificationItem.target = self
+        settingsSubmenu.addItem(testNotificationItem)
+
+        let openNotificationSettingsItem = NSMenuItem(title: "Open Notification Settings...", action: #selector(openNotificationSettings), keyEquivalent: "")
+        openNotificationSettingsItem.target = self
+        settingsSubmenu.addItem(openNotificationSettingsItem)
 
         settingsSubmenu.addItem(NSMenuItem.separator())
 
@@ -303,8 +354,72 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func refresh() {
-        sessionManager.scanForSessions()
-        updateMenu()
+        // Scan must run on scanQueue for thread safety
+        sessionManager.triggerScan()
+    }
+
+    @objc func testNotification() {
+        // Check notification authorization first
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                NSLog("Notification auth status: \(settings.authorizationStatus.rawValue)")
+                NSLog("Alert setting: \(settings.alertSetting.rawValue)")
+
+                if settings.authorizationStatus == .denied {
+                    self.showAlert(title: "Notifications Disabled",
+                                   message: "Please enable notifications for Beacon in:\nSystem Settings → Notifications → Beacon")
+                    return
+                }
+
+                if settings.authorizationStatus == .notDetermined {
+                    // Request permission
+                    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                        DispatchQueue.main.async {
+                            if granted {
+                                self.sendTestNotification()
+                            } else {
+                                self.showAlert(title: "Permission Denied",
+                                               message: "Notification permission was denied.")
+                            }
+                        }
+                    }
+                    return
+                }
+
+                self.sendTestNotification()
+            }
+        }
+    }
+
+    func sendTestNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = "Beacon Test"
+        content.body = "This is a test notification from Beacon."
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: "test-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+
+        NSLog("Sending test notification...")
+        UNUserNotificationCenter.current().add(request) { error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    NSLog("Test notification failed: \(error)")
+                    self.showAlert(title: "Error", message: "Failed to send notification: \(error.localizedDescription)")
+                } else {
+                    NSLog("Test notification sent successfully")
+                }
+            }
+        }
+    }
+
+    @objc func openNotificationSettings() {
+        // Open System Settings -> Notifications -> Beacon
+        let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!
+        NSWorkspace.shared.open(url)
     }
 
     @objc func quit() {
