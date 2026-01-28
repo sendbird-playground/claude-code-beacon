@@ -992,7 +992,12 @@ class SessionManager {
 
 
     func navigateToSession(id: String) {
-        guard let session = sessions.first(where: { $0.id == id }) else { return }
+        NSLog("navigateToSession called for id: \(id)")
+        guard let session = sessions.first(where: { $0.id == id }) else {
+            NSLog("navigateToSession: session not found for id: \(id)")
+            return
+        }
+        NSLog("navigateToSession: found session \(session.projectName), terminal: \(session.terminalInfo)")
 
         let appName = session.terminalInfo
 

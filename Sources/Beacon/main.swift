@@ -336,6 +336,7 @@ struct SessionRowView: View {
         .padding(.trailing, 12)
         .padding(.vertical, 6)
         .background(isHovered ? Color.primary.opacity(0.1) : Color.clear)
+        .contentShape(Rectangle())  // Make entire row tappable
         .onHover { isHovered = $0 }
         .onTapGesture {
             viewModel.showSession(session)
