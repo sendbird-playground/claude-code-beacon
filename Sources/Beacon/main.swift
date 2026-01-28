@@ -116,9 +116,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 menu.addItem(item)
             }
 
+            // Show remaining sessions in expandable submenu
             if sorted.count > maxToShow {
-                let moreItem = NSMenuItem(title: "  ... and \(sorted.count - maxToShow) more", action: nil, keyEquivalent: "")
-                moreItem.isEnabled = false
+                let remaining = Array(sorted.dropFirst(maxToShow))
+                let moreItem = NSMenuItem(title: "  ... and \(remaining.count) more", action: nil, keyEquivalent: "")
+                let moreSubmenu = NSMenu()
+
+                for session in remaining {
+                    let key = "\(session.terminalInfo)|\(session.projectName)"
+                    let count = nameCounts[key] ?? 1
+                    var suffix = ""
+                    if count > 1 {
+                        nameIndices[key, default: 0] += 1
+                        suffix = " #\(nameIndices[key]!)"
+                    }
+                    let item = createSessionMenuItem(session, suffix: suffix)
+                    moreSubmenu.addItem(item)
+                }
+
+                moreItem.submenu = moreSubmenu
                 menu.addItem(moreItem)
             }
         }
