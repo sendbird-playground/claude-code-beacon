@@ -454,39 +454,59 @@ struct SessionReorderDropDelegate: DropDelegate {
     let viewModel: SessionsViewModel
     @Binding var draggingSession: ClaudeSession?
 
+    private func reorderBasedOnLocation(_ info: DropInfo, dragging: ClaudeSession) {
+        // Determine if dropping in top or bottom half based on drop location
+        // Row height is approximately 36 points (padding + content)
+        let rowHeight: CGFloat = 36
+        let dropY = info.location.y
+        let isBottomHalf = dropY > rowHeight / 2
+
+        if isBottomHalf {
+            // Insert after target - find the next session
+            let nextIndex = targetIndex + 1
+            if nextIndex < allSessions.count {
+                viewModel.reorderSession(dragging, before: allSessions[nextIndex])
+            } else {
+                // Insert at end (before nil)
+                viewModel.reorderSession(dragging, before: nil)
+            }
+        } else {
+            // Insert before target
+            viewModel.reorderSession(dragging, before: targetSession)
+        }
+    }
+
     func performDrop(info: DropInfo) -> Bool {
         guard let dragging = draggingSession else { return false }
 
         // If dragging session is from a different group, move it to this group first
         if dragging.groupId != group.id {
             viewModel.moveSession(dragging, toGroup: group.id)
-        }
-
-        // Reorder within the group
-        if dragging.id != targetSession.id {
-            // Determine if dropping in top or bottom half based on drop location
-            // Row height is approximately 36 points (padding + content)
-            let rowHeight: CGFloat = 36
-            let dropY = info.location.y
-            let isBottomHalf = dropY > rowHeight / 2
-
-            if isBottomHalf {
-                // Insert after target - find the next session
-                let nextIndex = targetIndex + 1
-                if nextIndex < allSessions.count {
-                    viewModel.reorderSession(dragging, before: allSessions[nextIndex])
-                } else {
-                    // Insert at end (before nil)
-                    viewModel.reorderSession(dragging, before: nil)
-                }
-            } else {
-                // Insert before target
-                viewModel.reorderSession(dragging, before: targetSession)
-            }
+            // After moving to group, reorder within it
+            reorderBasedOnLocation(info, dragging: dragging)
         }
 
         draggingSession = nil
         return true
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging = draggingSession,
+              dragging.id != targetSession.id,
+              dragging.groupId == group.id else { return }
+
+        // Live reordering preview with midpoint detection
+        reorderBasedOnLocation(info, dragging: dragging)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        // Continue updating position as drag moves
+        if let dragging = draggingSession,
+           dragging.id != targetSession.id,
+           dragging.groupId == group.id {
+            reorderBasedOnLocation(info, dragging: dragging)
+        }
+        return DropProposal(operation: .move)
     }
 
     func validateDrop(info: DropInfo) -> Bool {
