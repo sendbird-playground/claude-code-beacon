@@ -24,7 +24,6 @@ extension NSColor {
 class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var sessionManager: SessionManager!
-    var isMenuExpanded: Bool = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Set notification delegate FIRST
@@ -90,27 +89,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         menu.addItem(headerItem)
         menu.addItem(NSMenuItem.separator())
 
-        let sessions = sessionManager.sessions
+        // Only show running sessions
+        let runningSessions = sessionManager.sessions.filter { $0.status == .running }
 
-        if sessions.isEmpty {
-            let emptyItem = NSMenuItem(title: "No active sessions", action: nil, keyEquivalent: "")
+        if runningSessions.isEmpty {
+            let emptyItem = NSMenuItem(title: "No running sessions", action: nil, keyEquivalent: "")
             emptyItem.isEnabled = false
             menu.addItem(emptyItem)
         } else {
-            // Sort: running first, then by completedAt descending (most recent first)
-            let sorted = sessions.sorted { a, b in
-                // Running sessions come first
-                if a.status == .running && b.status != .running { return true }
-                if a.status != .running && b.status == .running { return false }
-                // Both running: sort by createdAt descending
-                if a.status == .running && b.status == .running {
-                    return a.createdAt > b.createdAt
-                }
-                // Both completed: sort by completedAt descending
-                let aTime = a.completedAt ?? a.createdAt
-                let bTime = b.completedAt ?? b.createdAt
-                return aTime > bTime
-            }
+            // Sort by creation time descending (newest first)
+            let sorted = runningSessions.sorted { $0.createdAt > $1.createdAt }
 
             // Track duplicates to add suffixes
             var nameCounts: [String: Int] = [:]
@@ -123,11 +111,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             }
 
             // Second pass: create menu items
-            let maxToShow = sessionManager.maxRecentSessions
-            let showAll = isMenuExpanded || sorted.count <= maxToShow
-            let sessionsToShow = showAll ? sorted : Array(sorted.prefix(maxToShow))
-
-            for session in sessionsToShow {
+            for session in sorted {
                 let key = "\(session.terminalInfo)|\(session.projectName)"
                 let count = nameCounts[key] ?? 1
                 var suffix = ""
@@ -138,29 +122,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 let item = createSessionMenuItem(session, suffix: suffix)
                 menu.addItem(item)
             }
-
-            // Show expand/collapse option
-            if sorted.count > maxToShow {
-                if isMenuExpanded {
-                    let lessItem = NSMenuItem(title: "  ▲ Show less", action: #selector(collapseMenu), keyEquivalent: "")
-                    lessItem.target = self
-                    lessItem.tag = expandCollapseTag
-                    menu.addItem(lessItem)
-                } else {
-                    let moreItem = NSMenuItem(title: "  ▼ ... and \(sorted.count - maxToShow) more", action: #selector(expandMenu), keyEquivalent: "")
-                    moreItem.target = self
-                    moreItem.tag = expandCollapseTag
-                    menu.addItem(moreItem)
-                }
-            }
         }
 
         // Actions
         menu.addItem(NSMenuItem.separator())
-
-        let clearRecentItem = NSMenuItem(title: "Clear Completed", action: #selector(clearRecent), keyEquivalent: "")
-        clearRecentItem.target = self
-        menu.addItem(clearRecentItem)
 
         let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refresh), keyEquivalent: "r")
         refreshItem.target = self
@@ -573,29 +538,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func createSessionMenuItem(_ session: ClaudeSession, suffix: String = "") -> NSMenuItem {
-        // Status indicator and time context
-        let statusIndicator: String
-        let timeContext: String
-
-        switch session.status {
-        case .running:
-            statusIndicator = "●"
-            timeContext = " (\(formatElapsedTime(session.createdAt)))"
-        case .completed:
-            statusIndicator = "○"
-            if let completedAt = session.completedAt {
-                timeContext = " (\(formatElapsedTime(completedAt)) ago)"
-            } else {
-                timeContext = ""
-            }
-        case .acknowledged:
-            statusIndicator = "✓"
-            if let completedAt = session.completedAt {
-                timeContext = " (\(formatElapsedTime(completedAt)) ago)"
-            } else {
-                timeContext = ""
-            }
-        }
+        // Running sessions show filled bullet, elapsed time
+        let statusIndicator = "●"
+        let timeContext = " (\(formatElapsedTime(session.createdAt)))"
 
         let title = "  \(statusIndicator) \(session.terminalInfo) · \(session.projectName)\(suffix)\(timeContext)"
 
@@ -715,11 +660,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func updateIconBadge() {
-        let needsAttention = sessionManager.sessions.filter { $0.status == .completed }.count
+        let runningCount = sessionManager.sessions.filter { $0.status == .running }.count
 
         if let button = statusItem.button {
-            if needsAttention > 0 {
-                button.image = NSImage(systemSymbolName: "bell.badge.fill", accessibilityDescription: "Beacon - \(needsAttention) tasks")
+            if runningCount > 0 {
+                button.image = NSImage(systemSymbolName: "bell.badge.fill", accessibilityDescription: "Beacon - \(runningCount) running")
             } else {
                 button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Beacon")
             }
@@ -747,10 +692,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     @objc func killSession(_ sender: NSMenuItem) {
         guard let sessionId = sender.representedObject as? String else { return }
         sessionManager.killSession(id: sessionId)
-    }
-
-    @objc func clearRecent() {
-        sessionManager.clearRecent()
     }
 
     @objc func addPronunciationRule() {
@@ -1022,78 +963,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         sessionManager.setGroupReminderOverride(id: groupId, enabled: value)
     }
 
-    private let expandCollapseTag = 9999
-    private let extraSessionTagBase = 10000
-
-    @objc func expandMenu() {
-        guard let menu = statusItem.menu else { return }
-        isMenuExpanded = true
-
-        // Find the expand/collapse item
-        guard let expandItem = menu.item(withTag: expandCollapseTag) else { return }
-        let insertIndex = menu.index(of: expandItem)
-
-        // Get sessions to add
-        let sessions = sessionManager.sessions
-        let sorted = sessions.sorted { a, b in
-            if a.status == .running && b.status != .running { return true }
-            if a.status != .running && b.status == .running { return false }
-            if a.status == .running && b.status == .running {
-                return a.createdAt > b.createdAt
-            }
-            let aTime = a.completedAt ?? a.createdAt
-            let bTime = b.completedAt ?? b.createdAt
-            return aTime > bTime
-        }
-
-        let maxToShow = sessionManager.maxRecentSessions
-        let extraSessions = Array(sorted.dropFirst(maxToShow))
-
-        // Insert extra session items before the expand/collapse item
-        for (i, session) in extraSessions.enumerated() {
-            let item = createSessionMenuItem(session, suffix: "")
-            item.tag = extraSessionTagBase + i
-            menu.insertItem(item, at: insertIndex + i)
-        }
-
-        // Update expand/collapse item to "Show less"
-        expandItem.title = "  ▲ Show less"
-        expandItem.action = #selector(collapseMenu)
-    }
-
-    @objc func collapseMenu() {
-        guard let menu = statusItem.menu else { return }
-        isMenuExpanded = false
-
-        // Remove extra session items
-        var itemsToRemove: [NSMenuItem] = []
-        for item in menu.items {
-            if item.tag >= extraSessionTagBase {
-                itemsToRemove.append(item)
-            }
-        }
-        for item in itemsToRemove {
-            menu.removeItem(item)
-        }
-
-        // Update expand/collapse item to "Show more"
-        if let collapseItem = menu.item(withTag: expandCollapseTag) {
-            let sessions = sessionManager.sessions
-            let maxToShow = sessionManager.maxRecentSessions
-            let remaining = sessions.count - maxToShow
-            collapseItem.title = "  ▼ ... and \(remaining) more"
-            collapseItem.action = #selector(expandMenu)
-        }
-    }
-
     // MARK: - NSMenuDelegate
 
     func menuDidClose(_ menu: NSMenu) {
-        // Reset expanded state when menu closes
-        if isMenuExpanded {
-            isMenuExpanded = false
-            updateMenu()
-        }
+        // Menu closed - no special handling needed
     }
 
     @objc func refresh() {
