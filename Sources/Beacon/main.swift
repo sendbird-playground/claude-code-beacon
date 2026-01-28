@@ -876,8 +876,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "bell.badge", accessibilityDescription: "Beacon")
-            button.image?.isTemplate = true
+            button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Beacon")
             button.action = #selector(togglePopover)
             button.target = self
         }
@@ -948,7 +947,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             } else {
                 button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Beacon")
             }
-            button.image?.isTemplate = true
         }
     }
 
