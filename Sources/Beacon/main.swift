@@ -384,27 +384,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func sendTestNotification() {
-        let content = UNMutableNotificationContent()
-        content.title = "Beacon Test"
-        content.body = "This is a test notification from Beacon."
-        content.sound = .default
+        // Respect user preferences for test notification
+        if sessionManager.notificationEnabled {
+            let content = UNMutableNotificationContent()
+            content.title = "Beacon Test"
+            content.body = "This is a test notification from Beacon."
+            content.sound = nil  // We handle sound separately
 
-        let request = UNNotificationRequest(
-            identifier: "test-\(UUID().uuidString)",
-            content: content,
-            trigger: nil
-        )
+            let request = UNNotificationRequest(
+                identifier: "test-\(UUID().uuidString)",
+                content: content,
+                trigger: nil
+            )
 
-        NSLog("Sending test notification...")
-        UNUserNotificationCenter.current().add(request) { error in
-            DispatchQueue.main.async {
+            NSLog("Sending test notification...")
+            UNUserNotificationCenter.current().add(request) { error in
                 if let error = error {
                     NSLog("Test notification failed: \(error)")
-                    self.showAlert(title: "Error", message: "Failed to send notification: \(error.localizedDescription)")
-                } else {
-                    NSLog("Test notification sent successfully")
                 }
             }
+        }
+
+        // Play sound if enabled
+        if sessionManager.soundEnabled {
+            sessionManager.playAlertSound()
+        }
+
+        // Speak if voice enabled
+        if sessionManager.voiceEnabled {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+            task.arguments = ["Test notification"]
+            try? task.run()
         }
     }
 
