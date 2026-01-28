@@ -247,11 +247,23 @@ class SessionManager {
 
             switch settings.authorizationStatus {
             case .notDetermined:
-                // Request permission
-                center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                // Request provisional authorization first (doesn't require user interaction)
+                // This helps the app appear in System Settings > Notifications
+                // Then request full authorization which may show a dialog
+                center.requestAuthorization(options: [.alert, .sound, .badge, .provisional]) { granted, error in
                     NSLog("Notification permission granted: \(granted)")
                     if let error = error {
                         NSLog("Notification permission error: \(error)")
+                    }
+
+                    // If provisional granted, also request full authorization
+                    if granted {
+                        center.requestAuthorization(options: [.alert, .sound, .badge]) { fullGranted, fullError in
+                            NSLog("Full notification permission granted: \(fullGranted)")
+                            if let fullError = fullError {
+                                NSLog("Full notification permission error: \(fullError)")
+                            }
+                        }
                     }
                 }
             case .denied:
