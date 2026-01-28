@@ -1739,23 +1739,28 @@ class SessionManager {
         let textToSpeak = applyPronunciationRules(session.projectName)
         NSLog("Speaking: \(textToSpeak)")
 
-        // Cancel any ongoing speech
-        if let existing = speechTask, existing.isRunning {
-            existing.terminate()
-        }
+        // Must run on main thread for Process to work correctly
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
 
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-        task.arguments = [textToSpeak]
+            // Cancel any ongoing speech
+            if let existing = self.speechTask, existing.isRunning {
+                existing.terminate()
+            }
 
-        // Keep reference to prevent deallocation
-        speechTask = task
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+            task.arguments = [textToSpeak]
 
-        do {
-            try task.run()
-            NSLog("Speech task started successfully")
-        } catch {
-            NSLog("Failed to start speech: \(error)")
+            // Keep reference to prevent deallocation
+            self.speechTask = task
+
+            do {
+                try task.run()
+                NSLog("Speech task started successfully")
+            } catch {
+                NSLog("Failed to start speech: \(error)")
+            }
         }
     }
 
@@ -1787,23 +1792,28 @@ class SessionManager {
     private var soundTask: Process?
 
     func playAlertSound() {
-        // Cancel any ongoing sound
-        if let existing = soundTask, existing.isRunning {
-            existing.terminate()
-        }
+        // Must run on main thread for Process to work correctly
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
 
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
-        task.arguments = ["/System/Library/Sounds/Glass.aiff"]
+            // Cancel any ongoing sound
+            if let existing = self.soundTask, existing.isRunning {
+                existing.terminate()
+            }
 
-        // Keep reference to prevent deallocation
-        soundTask = task
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
+            task.arguments = ["/System/Library/Sounds/Glass.aiff"]
 
-        do {
-            try task.run()
-            NSLog("Sound task started successfully")
-        } catch {
-            NSLog("Failed to play sound: \(error)")
+            // Keep reference to prevent deallocation
+            self.soundTask = task
+
+            do {
+                try task.run()
+                NSLog("Sound task started successfully")
+            } catch {
+                NSLog("Failed to play sound: \(error)")
+            }
         }
     }
 
