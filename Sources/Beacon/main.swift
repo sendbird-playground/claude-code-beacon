@@ -294,6 +294,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             }
             reminderCountSubmenu.addItem(item)
         }
+
+        // Add Infinite option (value 0)
+        let infiniteItem = NSMenuItem(title: "∞ Infinite", action: #selector(setReminderCount(_:)), keyEquivalent: "")
+        infiniteItem.target = self
+        infiniteItem.representedObject = 0
+        if sessionManager.reminderCount == 0 {
+            infiniteItem.state = .on
+        }
+        reminderCountSubmenu.addItem(infiniteItem)
+
         reminderCountItem.submenu = reminderCountSubmenu
         settingsSubmenu.addItem(reminderCountItem)
 

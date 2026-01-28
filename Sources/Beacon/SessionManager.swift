@@ -1286,40 +1286,66 @@ class SessionManager {
     }
 
     func scheduleReminders(for session: ClaudeSession) {
-        // Schedule multiple reminder notifications
-        for i in 1...reminderCount {
-            let content = UNMutableNotificationContent()
-            content.title = "Reminder: Task Completed"
-            content.body = "\(session.terminalInfo) · \(session.projectName)"
-            content.sound = .default
-            content.userInfo = ["sessionId": session.id, "isReminder": true]
-            content.categoryIdentifier = SessionManager.notificationCategoryId
+        let content = UNMutableNotificationContent()
+        content.title = "Reminder: Task Completed"
+        content.body = "\(session.terminalInfo) · \(session.projectName)"
+        content.sound = .default
+        content.userInfo = ["sessionId": session.id, "isReminder": true]
+        content.categoryIdentifier = SessionManager.notificationCategoryId
 
+        if reminderCount == 0 {
+            // Infinite: use repeating trigger
             let trigger = UNTimeIntervalNotificationTrigger(
-                timeInterval: TimeInterval(reminderInterval * i),
-                repeats: false
+                timeInterval: TimeInterval(reminderInterval),
+                repeats: true
             )
 
             let request = UNNotificationRequest(
-                identifier: "\(session.id)-reminder-\(i)",
+                identifier: "\(session.id)-reminder-infinite",
                 content: content,
                 trigger: trigger
             )
 
             UNUserNotificationCenter.current().add(request) { error in
                 if let error = error {
-                    NSLog("Failed to schedule reminder \(i): \(error)")
+                    NSLog("Failed to schedule infinite reminder: \(error)")
                 } else {
-                    NSLog("Reminder \(i) scheduled for \(self.reminderInterval * i)s")
+                    NSLog("Infinite reminder scheduled every \(self.reminderInterval)s")
+                }
+            }
+        } else {
+            // Finite: schedule specific number of reminders
+            for i in 1...reminderCount {
+                let trigger = UNTimeIntervalNotificationTrigger(
+                    timeInterval: TimeInterval(reminderInterval * i),
+                    repeats: false
+                )
+
+                let request = UNNotificationRequest(
+                    identifier: "\(session.id)-reminder-\(i)",
+                    content: content,
+                    trigger: trigger
+                )
+
+                UNUserNotificationCenter.current().add(request) { error in
+                    if let error = error {
+                        NSLog("Failed to schedule reminder \(i): \(error)")
+                    } else {
+                        NSLog("Reminder \(i) scheduled for \(self.reminderInterval * i)s")
+                    }
                 }
             }
         }
     }
 
     func cancelReminders(for sessionId: String) {
-        // Cancel all reminders for this session
+        // Cancel infinite reminder
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["\(sessionId)-reminder-infinite"])
+
+        // Cancel finite reminders (use a reasonable max to cover all cases)
         var identifiers: [String] = []
-        for i in 1...reminderCount {
+        let maxCount = max(reminderCount, 10)
+        for i in 1...maxCount {
             identifiers.append("\(sessionId)-reminder-\(i)")
         }
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
