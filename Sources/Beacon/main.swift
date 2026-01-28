@@ -158,6 +158,12 @@ struct GroupSectionView: View {
                         draggingSession = session
                         return NSItemProvider(object: session.id as NSString)
                     }
+                    .onDrop(of: [.text], delegate: SessionReorderDropDelegate(
+                        targetSession: session,
+                        group: group,
+                        viewModel: viewModel,
+                        draggingSession: $draggingSession
+                    ))
             }
         }
         .onDrop(of: [.text], delegate: GroupDropDelegate(
@@ -438,6 +444,43 @@ struct GroupDropDelegate: DropDelegate {
     }
 }
 
+struct SessionReorderDropDelegate: DropDelegate {
+    let targetSession: ClaudeSession
+    let group: SessionGroup
+    let viewModel: SessionsViewModel
+    @Binding var draggingSession: ClaudeSession?
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let dragging = draggingSession else { return false }
+
+        // If dragging session is from a different group, move it to this group first
+        if dragging.groupId != group.id {
+            viewModel.moveSession(dragging, toGroup: group.id)
+        }
+
+        // Reorder within the group
+        if dragging.id != targetSession.id {
+            viewModel.reorderSession(dragging, before: targetSession)
+        }
+
+        draggingSession = nil
+        return true
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging = draggingSession,
+              dragging.id != targetSession.id,
+              dragging.groupId == group.id else { return }
+
+        // Live reordering preview
+        viewModel.reorderSession(dragging, before: targetSession)
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        return draggingSession != nil
+    }
+}
+
 
 // MARK: - ViewModel
 
@@ -483,7 +526,7 @@ class SessionsViewModel: ObservableObject {
     func sessions(for group: SessionGroup) -> [ClaudeSession] {
         runningSessions
             .filter { $0.groupId == group.id }
-            .sorted { $0.createdAt > $1.createdAt }
+            .sorted { $0.orderInGroup < $1.orderInGroup }
     }
 
     func formatElapsedTime(_ date: Date) -> String {
@@ -580,6 +623,10 @@ class SessionsViewModel: ObservableObject {
         sessionManager.setSessionSoundOverride(id: sessionId, enabled: nil)
         sessionManager.setSessionVoiceOverride(id: sessionId, enabled: nil)
         sessionManager.setSessionReminderOverride(id: sessionId, enabled: nil)
+    }
+
+    func reorderSession(_ session: ClaudeSession, before targetSession: ClaudeSession?) {
+        sessionManager.reorderSessionInGroup(sessionId: session.id, beforeSessionId: targetSession?.id)
     }
 }
 

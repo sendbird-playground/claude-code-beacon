@@ -88,6 +88,9 @@ struct ClaudeSession: Identifiable, Codable {
     var alertTriggeredAt: Date?
     var remindersSent: Int = 0
 
+    // Manual ordering within group (lower = higher in list)
+    var orderInGroup: Int = 0
+
     init(
         id: String = UUID().uuidString,
         projectName: String,
@@ -110,7 +113,8 @@ struct ClaudeSession: Identifiable, Codable {
         reminderOverride: Bool? = nil,
         groupId: String? = nil,
         alertTriggeredAt: Date? = nil,
-        remindersSent: Int = 0
+        remindersSent: Int = 0,
+        orderInGroup: Int = 0
     ) {
         self.id = id
         self.projectName = projectName
@@ -134,6 +138,7 @@ struct ClaudeSession: Identifiable, Codable {
         self.groupId = groupId
         self.alertTriggeredAt = alertTriggeredAt
         self.remindersSent = remindersSent
+        self.orderInGroup = orderInGroup
     }
 
 
@@ -1325,9 +1330,48 @@ class SessionManager {
     func setSessionGroup(sessionId: String, groupId: String?) {
         if let index = sessions.firstIndex(where: { $0.id == sessionId }) {
             sessions[index].groupId = groupId
+            // Assign order at the end of the group
+            if let gid = groupId {
+                let maxOrder = sessions.filter { $0.groupId == gid }.map { $0.orderInGroup }.max() ?? -1
+                sessions[index].orderInGroup = maxOrder + 1
+            } else {
+                sessions[index].orderInGroup = 0
+            }
             saveSessions()
             onSessionsChanged?()
         }
+    }
+
+    func reorderSessionInGroup(sessionId: String, beforeSessionId: String?) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        let session = sessions[sessionIndex]
+        guard let groupId = session.groupId else { return }
+
+        // Get all sessions in this group, sorted by current order
+        var groupSessions = sessions.filter { $0.groupId == groupId && $0.status == .running }
+            .sorted { $0.orderInGroup < $1.orderInGroup }
+
+        // Remove the session being moved
+        groupSessions.removeAll { $0.id == sessionId }
+
+        // Find insert position
+        if let beforeId = beforeSessionId,
+           let insertIndex = groupSessions.firstIndex(where: { $0.id == beforeId }) {
+            groupSessions.insert(session, at: insertIndex)
+        } else {
+            // Insert at end
+            groupSessions.append(session)
+        }
+
+        // Update orders for all sessions in group
+        for (order, groupSession) in groupSessions.enumerated() {
+            if let idx = sessions.firstIndex(where: { $0.id == groupSession.id }) {
+                sessions[idx].orderInGroup = order
+            }
+        }
+
+        saveSessions()
+        onSessionsChanged?()
     }
 
     // MARK: - Group Management
