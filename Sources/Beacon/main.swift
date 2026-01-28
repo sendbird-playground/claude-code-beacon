@@ -467,17 +467,8 @@ struct SessionReorderDropDelegate: DropDelegate {
         return true
     }
 
-    func dropEntered(info: DropInfo) {
-        guard let dragging = draggingSession,
-              dragging.id != targetSession.id,
-              dragging.groupId == group.id else { return }
-
-        // Live reordering preview
-        viewModel.reorderSession(dragging, before: targetSession)
-    }
-
     func validateDrop(info: DropInfo) -> Bool {
-        return draggingSession != nil
+        return draggingSession != nil && draggingSession?.id != targetSession.id
     }
 }
 
