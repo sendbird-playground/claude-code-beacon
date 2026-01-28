@@ -118,6 +118,9 @@ struct GroupSectionView: View {
     @Binding var draggingGroup: SessionGroup?
     @State private var isTargeted = false
     @State private var isHovered = false
+    @State private var isEditingName = false
+    @State private var editedName = ""
+    @State private var showColorPicker = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -125,17 +128,50 @@ struct GroupSectionView: View {
             HStack(spacing: 6) {
                 Circle()
                     .fill(Color(hex: group.colorHex) ?? .gray)
-                    .frame(width: 8, height: 8)
-                Text(group.name)
+                    .frame(width: 10, height: 10)
+                    .onTapGesture {
+                        showColorPicker = true
+                    }
+                    .popover(isPresented: $showColorPicker) {
+                        ColorPickerPopover(
+                            selectedColor: group.colorHex,
+                            onSelectColor: { colorHex in
+                                viewModel.setGroupColor(groupId: group.id, colorHex: colorHex)
+                                showColorPicker = false
+                            }
+                        )
+                    }
+
+                if isEditingName {
+                    TextField("Group name", text: $editedName, onCommit: {
+                        if !editedName.isEmpty {
+                            viewModel.renameGroup(groupId: group.id, name: editedName)
+                        }
+                        isEditingName = false
+                    })
+                    .textFieldStyle(.plain)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.primary)
+                    .frame(maxWidth: 150)
+                    .onExitCommand {
+                        isEditingName = false
+                    }
+                } else {
+                    Text(group.name)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.primary)
+                        .onTapGesture(count: 2) {
+                            editedName = group.name
+                            isEditingName = true
+                        }
+                }
+
                 Spacer()
-                if sessions.isEmpty && !isHovered {
+                if sessions.isEmpty && !isHovered && !isEditingName {
                     Text("Drop here")
                         .font(.caption2)
                         .foregroundColor(.secondary.opacity(0.6))
                 }
-                if isHovered {
+                if isHovered && !isEditingName {
                     Menu {
                         GroupSettingsMenu(group: group, viewModel: viewModel)
                     } label: {
@@ -175,6 +211,60 @@ struct GroupSectionView: View {
             draggingSession: $draggingSession,
             isTargeted: $isTargeted
         ))
+    }
+}
+
+struct ColorPickerPopover: View {
+    let selectedColor: String
+    let onSelectColor: (String) -> Void
+    @State private var customHex = ""
+    @State private var showCustomInput = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Choose Color")
+                .font(.headline)
+
+            // Preset colors grid
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(36)), count: 5), spacing: 8) {
+                ForEach(SessionGroup.availableColors, id: \.hex) { color in
+                    Circle()
+                        .fill(Color(hex: color.hex) ?? .gray)
+                        .frame(width: 28, height: 28)
+                        .overlay(
+                            Circle()
+                                .strokeBorder(Color.primary, lineWidth: selectedColor == color.hex ? 2 : 0)
+                        )
+                        .onTapGesture {
+                            onSelectColor(color.hex)
+                        }
+                }
+            }
+
+            Divider()
+
+            // Custom color input
+            HStack {
+                TextField("Custom HEX", text: $customHex)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 100)
+
+                if let color = Color(hex: customHex.hasPrefix("#") ? customHex : "#\(customHex)") {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 20, height: 20)
+
+                    Button("Apply") {
+                        let hex = customHex.hasPrefix("#") ? customHex : "#\(customHex)"
+                        onSelectColor(hex)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding()
+        .frame(width: 220)
     }
 }
 
@@ -629,6 +719,10 @@ class SessionsViewModel: ObservableObject {
 
     func setGroupColor(groupId: String, colorHex: String) {
         sessionManager.updateGroup(id: groupId, colorHex: colorHex)
+    }
+
+    func renameGroup(groupId: String, name: String) {
+        sessionManager.updateGroup(id: groupId, name: name)
     }
 
     func deleteGroup(groupId: String) {
