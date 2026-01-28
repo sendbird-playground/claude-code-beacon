@@ -3,7 +3,7 @@ import UserNotifications
 
 // MARK: - App Delegate
 
-class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var sessionManager: SessionManager!
     var isMenuExpanded: Bool = false
@@ -64,6 +64,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func updateMenu() {
         let menu = NSMenu()
+        menu.delegate = self
 
         // Header
         let headerItem = NSMenuItem(title: "Beacon - Claude Sessions", action: nil, keyEquivalent: "")
@@ -433,12 +434,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     @objc func expandMenu() {
         isMenuExpanded = true
-        reopenMenu()
+        updateMenu()
     }
 
     @objc func collapseMenu() {
         isMenuExpanded = false
-        reopenMenu()
+        updateMenu()
+    }
+
+    // MARK: - NSMenuDelegate
+
+    func menuDidClose(_ menu: NSMenu) {
+        // Reset expanded state when menu closes
+        if isMenuExpanded {
+            isMenuExpanded = false
+            updateMenu()
+        }
     }
 
     @objc func refresh() {
