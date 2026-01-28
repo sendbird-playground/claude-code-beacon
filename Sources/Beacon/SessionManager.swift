@@ -1706,7 +1706,9 @@ class SessionManager {
 
     func cancelReminders(for sessionId: String) {
         // Cancel infinite reminder
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["\(sessionId)-reminder-infinite"])
+        let infiniteId = "\(sessionId)-reminder-infinite"
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [infiniteId])
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [infiniteId])
 
         // Cancel finite reminders (use a reasonable max to cover all cases)
         var identifiers: [String] = []
@@ -1715,6 +1717,9 @@ class SessionManager {
             identifiers.append("\(sessionId)-reminder-\(i)")
         }
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
+
+        NSLog("Cancelled reminders for session \(sessionId)")
     }
 
     func speakSummary(_ session: ClaudeSession) {
