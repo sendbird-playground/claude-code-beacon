@@ -126,10 +126,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 if isMenuExpanded {
                     let lessItem = NSMenuItem(title: "  ▲ Show less", action: #selector(collapseMenu), keyEquivalent: "")
                     lessItem.target = self
+                    lessItem.tag = expandCollapseTag
                     menu.addItem(lessItem)
                 } else {
                     let moreItem = NSMenuItem(title: "  ▼ ... and \(sorted.count - maxToShow) more", action: #selector(expandMenu), keyEquivalent: "")
                     moreItem.target = self
+                    moreItem.tag = expandCollapseTag
                     menu.addItem(moreItem)
                 }
             }
@@ -423,25 +425,67 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         updateMenu()
     }
 
+    private let expandCollapseTag = 9999
+    private let extraSessionTagBase = 10000
+
     @objc func expandMenu() {
+        guard let menu = statusItem.menu else { return }
         isMenuExpanded = true
-        updateMenu()
-        // Immediately reshow the menu
-        DispatchQueue.main.async {
-            if let button = self.statusItem.button {
-                self.statusItem.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 5), in: button)
+
+        // Find the expand/collapse item
+        guard let expandItem = menu.item(withTag: expandCollapseTag) else { return }
+        let insertIndex = menu.index(of: expandItem)
+
+        // Get sessions to add
+        let sessions = sessionManager.sessions
+        let sorted = sessions.sorted { a, b in
+            if a.status == .running && b.status != .running { return true }
+            if a.status != .running && b.status == .running { return false }
+            if a.status == .running && b.status == .running {
+                return a.createdAt > b.createdAt
             }
+            let aTime = a.completedAt ?? a.createdAt
+            let bTime = b.completedAt ?? b.createdAt
+            return aTime > bTime
         }
+
+        let maxToShow = sessionManager.maxRecentSessions
+        let extraSessions = Array(sorted.dropFirst(maxToShow))
+
+        // Insert extra session items before the expand/collapse item
+        for (i, session) in extraSessions.enumerated() {
+            let item = createSessionMenuItem(session, suffix: "")
+            item.tag = extraSessionTagBase + i
+            menu.insertItem(item, at: insertIndex + i)
+        }
+
+        // Update expand/collapse item to "Show less"
+        expandItem.title = "  ▲ Show less"
+        expandItem.action = #selector(collapseMenu)
     }
 
     @objc func collapseMenu() {
+        guard let menu = statusItem.menu else { return }
         isMenuExpanded = false
-        updateMenu()
-        // Immediately reshow the menu
-        DispatchQueue.main.async {
-            if let button = self.statusItem.button {
-                self.statusItem.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 5), in: button)
+
+        // Remove extra session items
+        var itemsToRemove: [NSMenuItem] = []
+        for item in menu.items {
+            if item.tag >= extraSessionTagBase {
+                itemsToRemove.append(item)
             }
+        }
+        for item in itemsToRemove {
+            menu.removeItem(item)
+        }
+
+        // Update expand/collapse item to "Show more"
+        if let collapseItem = menu.item(withTag: expandCollapseTag) {
+            let sessions = sessionManager.sessions
+            let maxToShow = sessionManager.maxRecentSessions
+            let remaining = sessions.count - maxToShow
+            collapseItem.title = "  ▼ ... and \(remaining) more"
+            collapseItem.action = #selector(expandMenu)
         }
     }
 
