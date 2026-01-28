@@ -152,7 +152,7 @@ struct GroupSectionView: View {
             .onHover { isHovered = $0 }
 
             // Sessions (indented as children)
-            ForEach(sessions, id: \.id) { session in
+            ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
                 SessionRowView(session: session, viewModel: viewModel, indented: true)
                     .onDrag {
                         draggingSession = session
@@ -160,6 +160,8 @@ struct GroupSectionView: View {
                     }
                     .onDrop(of: [.text], delegate: SessionReorderDropDelegate(
                         targetSession: session,
+                        targetIndex: index,
+                        allSessions: sessions,
                         group: group,
                         viewModel: viewModel,
                         draggingSession: $draggingSession
@@ -446,6 +448,8 @@ struct GroupDropDelegate: DropDelegate {
 
 struct SessionReorderDropDelegate: DropDelegate {
     let targetSession: ClaudeSession
+    let targetIndex: Int
+    let allSessions: [ClaudeSession]
     let group: SessionGroup
     let viewModel: SessionsViewModel
     @Binding var draggingSession: ClaudeSession?
@@ -460,7 +464,25 @@ struct SessionReorderDropDelegate: DropDelegate {
 
         // Reorder within the group
         if dragging.id != targetSession.id {
-            viewModel.reorderSession(dragging, before: targetSession)
+            // Determine if dropping in top or bottom half based on drop location
+            // Row height is approximately 36 points (padding + content)
+            let rowHeight: CGFloat = 36
+            let dropY = info.location.y
+            let isBottomHalf = dropY > rowHeight / 2
+
+            if isBottomHalf {
+                // Insert after target - find the next session
+                let nextIndex = targetIndex + 1
+                if nextIndex < allSessions.count {
+                    viewModel.reorderSession(dragging, before: allSessions[nextIndex])
+                } else {
+                    // Insert at end (before nil)
+                    viewModel.reorderSession(dragging, before: nil)
+                }
+            } else {
+                // Insert before target
+                viewModel.reorderSession(dragging, before: targetSession)
+            }
         }
 
         draggingSession = nil
@@ -618,6 +640,10 @@ class SessionsViewModel: ObservableObject {
 
     func reorderSession(_ session: ClaudeSession, before targetSession: ClaudeSession?) {
         sessionManager.reorderSessionInGroup(sessionId: session.id, beforeSessionId: targetSession?.id)
+    }
+
+    func reorderSessionToEnd(_ session: ClaudeSession) {
+        sessionManager.reorderSessionInGroup(sessionId: session.id, beforeSessionId: nil)
     }
 }
 
