@@ -1733,12 +1733,24 @@ class SessionManager {
         NSLog("Cancelled reminders for session \(sessionId)")
     }
 
+    private var speechTask: Process?
+
     func speakSummary(_ session: ClaudeSession) {
         let textToSpeak = applyPronunciationRules(session.projectName)
         NSLog("Speaking: \(textToSpeak)")
+
+        // Cancel any ongoing speech
+        if let existing = speechTask, existing.isRunning {
+            existing.terminate()
+        }
+
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/say")
         task.arguments = [textToSpeak]
+
+        // Keep reference to prevent deallocation
+        speechTask = task
+
         do {
             try task.run()
             NSLog("Speech task started successfully")
