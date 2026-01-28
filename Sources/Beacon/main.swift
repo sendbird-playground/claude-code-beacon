@@ -840,18 +840,20 @@ struct SettingsView: View {
 
             Section("Groups") {
                 ForEach(groups.sorted { $0.order < $1.order }, id: \.id) { group in
-                    HStack {
-                        Circle()
-                            .fill(Color(hex: group.colorHex) ?? .gray)
-                            .frame(width: 12, height: 12)
-                        Text(group.name)
-                        Spacer()
-                        Button(action: { deleteGroup(group) }) {
-                            Image(systemName: "trash")
-                                .foregroundColor(.red)
+                    GroupSettingsRow(
+                        group: group,
+                        onUpdateName: { newName in
+                            sessionManager.updateGroup(id: group.id, name: newName)
+                            groups = sessionManager.groups
+                        },
+                        onUpdateColor: { newColor in
+                            sessionManager.updateGroup(id: group.id, colorHex: newColor)
+                            groups = sessionManager.groups
+                        },
+                        onDelete: {
+                            deleteGroup(group)
                         }
-                        .buttonStyle(.plain)
-                    }
+                    )
                 }
 
                 Button("Add Group...") {
@@ -944,6 +946,77 @@ struct SettingsView: View {
     func deleteRule(_ pattern: String) {
         sessionManager.removePronunciationRule(pattern: pattern)
         pronunciationRules = sessionManager.pronunciationRules
+    }
+}
+
+struct GroupSettingsRow: View {
+    let group: SessionGroup
+    let onUpdateName: (String) -> Void
+    let onUpdateColor: (String) -> Void
+    let onDelete: () -> Void
+
+    @State private var isEditingName = false
+    @State private var editedName = ""
+    @State private var showColorPicker = false
+    @FocusState private var nameFocused: Bool
+
+    var body: some View {
+        HStack {
+            Circle()
+                .fill(Color(hex: group.colorHex) ?? .gray)
+                .frame(width: 12, height: 12)
+                .onTapGesture {
+                    showColorPicker = true
+                }
+                .popover(isPresented: $showColorPicker) {
+                    ColorPickerPopover(
+                        selectedColor: group.colorHex,
+                        onSelectColor: { colorHex in
+                            onUpdateColor(colorHex)
+                            showColorPicker = false
+                        }
+                    )
+                }
+
+            if isEditingName {
+                TextField("Group name", text: $editedName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 150)
+                    .focused($nameFocused)
+                    .onSubmit {
+                        saveName()
+                    }
+                    .onChange(of: nameFocused) { focused in
+                        if !focused {
+                            saveName()
+                        }
+                    }
+            } else {
+                Text(group.name)
+                    .onTapGesture {
+                        editedName = group.name
+                        isEditingName = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            nameFocused = true
+                        }
+                    }
+            }
+
+            Spacer()
+
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+                    .foregroundColor(.red)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func saveName() {
+        if !editedName.isEmpty && editedName != group.name {
+            onUpdateName(editedName)
+        }
+        isEditingName = false
     }
 }
 
