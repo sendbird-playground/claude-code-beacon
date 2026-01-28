@@ -117,6 +117,7 @@ struct GroupSectionView: View {
     @Binding var draggingSession: ClaudeSession?
     @Binding var draggingGroup: SessionGroup?
     @State private var isTargeted = false
+    @State private var isHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -129,15 +130,26 @@ struct GroupSectionView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.primary)
                 Spacer()
-                if sessions.isEmpty {
+                if sessions.isEmpty && !isHovered {
                     Text("Drop here")
                         .font(.caption2)
                         .foregroundColor(.secondary.opacity(0.6))
                 }
+                if isHovered {
+                    Menu {
+                        GroupSettingsMenu(group: group, viewModel: viewModel)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .foregroundColor(.secondary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(width: 20)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(isTargeted ? Color.accentColor.opacity(0.2) : Color.clear)
+            .background(isTargeted ? Color.accentColor.opacity(0.2) : (isHovered ? Color.primary.opacity(0.05) : Color.clear))
+            .onHover { isHovered = $0 }
 
             // Sessions (indented as children)
             ForEach(sessions, id: \.id) { session in
@@ -155,6 +167,64 @@ struct GroupSectionView: View {
             draggingSession: $draggingSession,
             isTargeted: $isTargeted
         ))
+    }
+}
+
+struct GroupSettingsMenu: View {
+    let group: SessionGroup
+    @ObservedObject var viewModel: SessionsViewModel
+
+    var body: some View {
+        // Alert overrides
+        Menu("Alerts") {
+            Toggle("Notification", isOn: Binding(
+                get: { group.notificationOverride ?? true },
+                set: { viewModel.setGroupOverride(groupId: group.id, notification: $0) }
+            ))
+            Toggle("Sound", isOn: Binding(
+                get: { group.soundOverride ?? true },
+                set: { viewModel.setGroupOverride(groupId: group.id, sound: $0) }
+            ))
+            Toggle("Voice", isOn: Binding(
+                get: { group.voiceOverride ?? true },
+                set: { viewModel.setGroupOverride(groupId: group.id, voice: $0) }
+            ))
+            Toggle("Reminder", isOn: Binding(
+                get: { group.reminderOverride ?? true },
+                set: { viewModel.setGroupOverride(groupId: group.id, reminder: $0) }
+            ))
+
+            Divider()
+
+            Button("Use Global Settings") {
+                viewModel.clearGroupOverrides(groupId: group.id)
+            }
+        }
+
+        // Color picker
+        Menu("Color") {
+            ForEach(SessionGroup.availableColors, id: \.hex) { color in
+                Button {
+                    viewModel.setGroupColor(groupId: group.id, colorHex: color.hex)
+                } label: {
+                    HStack {
+                        if group.colorHex == color.hex {
+                            Image(systemName: "checkmark")
+                        }
+                        Circle()
+                            .fill(Color(hex: color.hex) ?? .gray)
+                            .frame(width: 10, height: 10)
+                        Text(color.name)
+                    }
+                }
+            }
+        }
+
+        Divider()
+
+        Button("Delete Group", role: .destructive) {
+            viewModel.deleteGroup(groupId: group.id)
+        }
     }
 }
 
@@ -238,6 +308,15 @@ struct SessionRowView: View {
             Spacer()
 
             if isHovered {
+                Menu {
+                    SessionSettingsMenu(session: session, viewModel: viewModel)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundColor(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 20)
+
                 Button(action: { viewModel.showSession(session) }) {
                     Image(systemName: "arrow.right.circle")
                         .foregroundColor(.secondary)
@@ -253,38 +332,69 @@ struct SessionRowView: View {
         .onTapGesture {
             viewModel.showSession(session)
         }
-        .contextMenu {
-            Menu("Move to Group") {
-                // Option to remove from group (ungrouped)
+    }
+}
+
+struct SessionSettingsMenu: View {
+    let session: ClaudeSession
+    @ObservedObject var viewModel: SessionsViewModel
+
+    var body: some View {
+        // Move to group
+        Menu("Move to Group") {
+            Button {
+                viewModel.moveSession(session, toGroup: nil)
+            } label: {
+                HStack {
+                    if session.groupId == nil {
+                        Image(systemName: "checkmark")
+                    }
+                    Text("None")
+                }
+            }
+
+            Divider()
+
+            ForEach(viewModel.sortedGroups, id: \.id) { group in
                 Button {
-                    viewModel.moveSession(session, toGroup: nil)
+                    viewModel.moveSession(session, toGroup: group.id)
                 } label: {
                     HStack {
-                        if session.groupId == nil {
+                        if session.groupId == group.id {
                             Image(systemName: "checkmark")
                         }
-                        Text("None")
+                        Circle()
+                            .fill(Color(hex: group.colorHex) ?? .gray)
+                            .frame(width: 8, height: 8)
+                        Text(group.name)
                     }
                 }
+            }
+        }
 
-                Divider()
+        // Alert overrides
+        Menu("Alerts") {
+            Toggle("Notification", isOn: Binding(
+                get: { session.notificationOverride ?? true },
+                set: { viewModel.setSessionOverride(sessionId: session.id, notification: $0) }
+            ))
+            Toggle("Sound", isOn: Binding(
+                get: { session.soundOverride ?? true },
+                set: { viewModel.setSessionOverride(sessionId: session.id, sound: $0) }
+            ))
+            Toggle("Voice", isOn: Binding(
+                get: { session.voiceOverride ?? true },
+                set: { viewModel.setSessionOverride(sessionId: session.id, voice: $0) }
+            ))
+            Toggle("Reminder", isOn: Binding(
+                get: { session.reminderOverride ?? true },
+                set: { viewModel.setSessionOverride(sessionId: session.id, reminder: $0) }
+            ))
 
-                // List all available groups
-                ForEach(viewModel.sortedGroups, id: \.id) { group in
-                    Button {
-                        viewModel.moveSession(session, toGroup: group.id)
-                    } label: {
-                        HStack {
-                            if session.groupId == group.id {
-                                Image(systemName: "checkmark")
-                            }
-                            Circle()
-                                .fill(Color(hex: group.colorHex) ?? .gray)
-                                .frame(width: 8, height: 8)
-                            Text(group.name)
-                        }
-                    }
-                }
+            Divider()
+
+            Button("Use Global Settings") {
+                viewModel.clearSessionOverrides(sessionId: session.id)
             }
         }
     }
@@ -414,6 +524,62 @@ class SessionsViewModel: ObservableObject {
 
     func openSettings() {
         appDelegate?.openSettingsWindow()
+    }
+
+    // MARK: - Group Settings
+
+    func setGroupOverride(groupId: String, notification: Bool? = nil, sound: Bool? = nil, voice: Bool? = nil, reminder: Bool? = nil) {
+        if let notification = notification {
+            sessionManager.setGroupNotificationOverride(id: groupId, enabled: notification)
+        }
+        if let sound = sound {
+            sessionManager.setGroupSoundOverride(id: groupId, enabled: sound)
+        }
+        if let voice = voice {
+            sessionManager.setGroupVoiceOverride(id: groupId, enabled: voice)
+        }
+        if let reminder = reminder {
+            sessionManager.setGroupReminderOverride(id: groupId, enabled: reminder)
+        }
+    }
+
+    func clearGroupOverrides(groupId: String) {
+        sessionManager.setGroupNotificationOverride(id: groupId, enabled: nil)
+        sessionManager.setGroupSoundOverride(id: groupId, enabled: nil)
+        sessionManager.setGroupVoiceOverride(id: groupId, enabled: nil)
+        sessionManager.setGroupReminderOverride(id: groupId, enabled: nil)
+    }
+
+    func setGroupColor(groupId: String, colorHex: String) {
+        sessionManager.updateGroup(id: groupId, colorHex: colorHex)
+    }
+
+    func deleteGroup(groupId: String) {
+        sessionManager.deleteGroup(id: groupId)
+    }
+
+    // MARK: - Session Settings
+
+    func setSessionOverride(sessionId: String, notification: Bool? = nil, sound: Bool? = nil, voice: Bool? = nil, reminder: Bool? = nil) {
+        if let notification = notification {
+            sessionManager.setSessionNotificationOverride(id: sessionId, enabled: notification)
+        }
+        if let sound = sound {
+            sessionManager.setSessionSoundOverride(id: sessionId, enabled: sound)
+        }
+        if let voice = voice {
+            sessionManager.setSessionVoiceOverride(id: sessionId, enabled: voice)
+        }
+        if let reminder = reminder {
+            sessionManager.setSessionReminderOverride(id: sessionId, enabled: reminder)
+        }
+    }
+
+    func clearSessionOverrides(sessionId: String) {
+        sessionManager.setSessionNotificationOverride(id: sessionId, enabled: nil)
+        sessionManager.setSessionSoundOverride(id: sessionId, enabled: nil)
+        sessionManager.setSessionVoiceOverride(id: sessionId, enabled: nil)
+        sessionManager.setSessionReminderOverride(id: sessionId, enabled: nil)
     }
 }
 
