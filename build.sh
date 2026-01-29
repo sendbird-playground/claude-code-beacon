@@ -61,6 +61,8 @@ cat > "$OUTPUT_DIR/$BUNDLE_NAME/Contents/Info.plist" << EOF
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
 </dict>
 </plist>
 EOF
