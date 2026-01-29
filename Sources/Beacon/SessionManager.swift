@@ -302,6 +302,9 @@ class SessionManager {
     // Track reminder counts per session
     private var reminderCounts: [String: Int] = [:]
 
+    // Flag to skip notifications on first scan after startup (stale sessions)
+    private var isFirstScan: Bool = true
+
     // Auto-update state
     @Published var updateAvailable: Bool = false
     @Published var isUpdating: Bool = false
@@ -811,13 +814,21 @@ class SessionManager {
         // This is a fallback in case process monitors miss something
         let runningPids = Set(claudeProcesses.map { $0.pid })
 
+        // On first scan after startup, silently clean up stale sessions without notifications
+        let shouldNotify = !isFirstScan
+
         for i in sessions.indices {
             if sessions[i].status == .running, let pid = sessions[i].pid {
                 if !runningPids.contains(pid) {
                     // Process ended - mark as completed (fallback if exit monitor didn't catch it)
                     sessions[i].status = .completed
                     sessions[i].completedAt = Date()
-                    sendCompletionNotification(for: sessions[i])
+
+                    if shouldNotify {
+                        sendCompletionNotification(for: sessions[i])
+                    } else {
+                        NSLog("Skipping notification for stale session on startup: \(sessions[i].projectName)")
+                    }
                     saveSessions()
                     trimOldSessions()
                     needsUIUpdate = true
@@ -826,6 +837,12 @@ class SessionManager {
                     stopProcessExitMonitor(pid: pid)
                 }
             }
+        }
+
+        // Mark first scan as complete
+        if isFirstScan {
+            isFirstScan = false
+            NSLog("First scan complete - future session completions will trigger notifications")
         }
 
         // Clean up old PIDs and monitors
