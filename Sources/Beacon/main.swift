@@ -872,10 +872,10 @@ struct SettingsView: View {
                     }
 
                 Picker("Interval", selection: $reminderInterval) {
-                    Text("30 sec").tag(30)
                     Text("1 min").tag(60)
                     Text("2 min").tag(120)
                     Text("5 min").tag(300)
+                    Text("10 min").tag(600)
                 }
                 .onChange(of: reminderInterval) { new in
                     sessionManager.reminderInterval = new
@@ -942,42 +942,47 @@ struct SettingsView: View {
                 }
             }
 
-            // Update section at the bottom
-            Section("Update") {
+            // About section
+            Section("About") {
+                HStack {
+                    Text("Version")
+                    Spacer()
+                    Text(SessionManager.appVersion)
+                        .foregroundColor(.secondary)
+                }
+
                 if sessionManager.updateAvailable {
                     HStack {
                         VStack(alignment: .leading) {
-                            Text("\(sessionManager.updateCommitsBehind) new commit\(sessionManager.updateCommitsBehind == 1 ? "" : "s") available")
+                            Text("Version \(sessionManager.latestVersion) available")
                                 .font(.headline)
-                            Text("Click to update and restart")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        if sessionManager.isUpdating {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        } else {
-                            Button("Update") {
-                                sessionManager.performUpdate()
+                            if !sessionManager.releaseNotes.isEmpty {
+                                Text(sessionManager.releaseNotes.prefix(100) + (sessionManager.releaseNotes.count > 100 ? "..." : ""))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
                             }
-                            .buttonStyle(.borderedProminent)
                         }
-                    }
-                } else {
-                    HStack {
-                        Text("Beacon is up to date")
-                            .foregroundColor(.secondary)
                         Spacer()
-                        Button("Check") {
-                            sessionManager.checkForUpdates()
+                        Button("View Release") {
+                            sessionManager.openReleasePage()
                         }
+                        .buttonStyle(.borderedProminent)
                     }
                 }
             }
         }
         .formStyle(.grouped)
         .padding()
+        .background(
+            // Invisible tap area to dismiss keyboard/resign focus when clicking outside text fields
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    // Resign first responder to trigger focus loss and save edits
+                    NSApp.keyWindow?.makeFirstResponder(nil)
+                }
+        )
         .sheet(isPresented: $showingAddGroup) {
             VStack(spacing: 16) {
                 Text("New Group")
@@ -1024,6 +1029,10 @@ struct SettingsView: View {
                 isPresented: $showingAddRule,
                 pronunciationRules: $pronunciationRules
             )
+        }
+        .onDisappear {
+            // Resign first responder when settings view closes to save any pending edits
+            NSApp.keyWindow?.makeFirstResponder(nil)
         }
     }
 
@@ -1329,7 +1338,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Beacon")
+            let image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Beacon")
+            image?.isTemplate = true  // Use template mode for proper menu bar appearance (white on dark, black on light)
+            button.image = image
             button.action = #selector(togglePopover)
             button.target = self
         }
@@ -1400,15 +1411,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func updateIconBadge() {
-        // Show badge only for completed (unacknowledged) sessions that need attention
-        let unacknowledgedCount = sessionManager.sessions.filter { $0.status == .completed }.count
+        // Show badge only for completed sessions that we actually alerted about
+        // Exclude sessions detected mid-run that haven't had an alert triggered
+        let unacknowledgedCount = sessionManager.sessions.filter {
+            $0.status == .completed && $0.alertTriggeredAt != nil
+        }.count
 
         if let button = statusItem.button {
+            let image: NSImage?
             if unacknowledgedCount > 0 {
-                button.image = NSImage(systemSymbolName: "bell.badge.fill", accessibilityDescription: "Beacon - \(unacknowledgedCount) alerts")
+                image = NSImage(systemSymbolName: "bell.badge.fill", accessibilityDescription: "Beacon - \(unacknowledgedCount) alerts")
             } else {
-                button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Beacon")
+                image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Beacon")
             }
+            image?.isTemplate = true  // Use template mode for proper menu bar appearance (white on dark, black on light)
+            button.image = image
         }
     }
 

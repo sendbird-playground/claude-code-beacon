@@ -66,6 +66,19 @@ struct SessionGroup: Identifiable, Codable {
         self.reminderOverride = reminderOverride
     }
 
+    // Custom decoder for backward compatibility
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        colorHex = try container.decodeIfPresent(String.self, forKey: .colorHex) ?? "#808080"
+        order = try container.decodeIfPresent(Int.self, forKey: .order) ?? 0
+        notificationOverride = try container.decodeIfPresent(Bool.self, forKey: .notificationOverride)
+        soundOverride = try container.decodeIfPresent(Bool.self, forKey: .soundOverride)
+        voiceOverride = try container.decodeIfPresent(Bool.self, forKey: .voiceOverride)
+        reminderOverride = try container.decodeIfPresent(Bool.self, forKey: .reminderOverride)
+    }
+
     // Predefined pastel colors for easy selection
     static let availableColors: [(name: String, hex: String)] = [
         ("Rose", "#FFB3BA"),
@@ -167,6 +180,35 @@ struct ClaudeSession: Identifiable, Codable {
         self.detectedMidRun = detectedMidRun
     }
 
+    // Custom decoder for backward compatibility with older saved data
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        projectName = try container.decode(String.self, forKey: .projectName)
+        terminalInfo = try container.decode(String.self, forKey: .terminalInfo)
+        workingDirectory = try container.decode(String.self, forKey: .workingDirectory)
+        status = try container.decode(SessionStatus.self, forKey: .status)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
+        acknowledgedAt = try container.decodeIfPresent(Date.self, forKey: .acknowledgedAt)
+        pid = try container.decodeIfPresent(Int32.self, forKey: .pid)
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        details = try container.decodeIfPresent(String.self, forKey: .details)
+        tag = try container.decodeIfPresent(String.self, forKey: .tag)
+        weztermPane = try container.decodeIfPresent(String.self, forKey: .weztermPane)
+        ttyName = try container.decodeIfPresent(String.self, forKey: .ttyName)
+        pycharmWindow = try container.decodeIfPresent(String.self, forKey: .pycharmWindow)
+        notificationOverride = try container.decodeIfPresent(Bool.self, forKey: .notificationOverride)
+        soundOverride = try container.decodeIfPresent(Bool.self, forKey: .soundOverride)
+        voiceOverride = try container.decodeIfPresent(Bool.self, forKey: .voiceOverride)
+        reminderOverride = try container.decodeIfPresent(Bool.self, forKey: .reminderOverride)
+        groupId = try container.decodeIfPresent(String.self, forKey: .groupId)
+        alertTriggeredAt = try container.decodeIfPresent(Date.self, forKey: .alertTriggeredAt)
+        // Fields with defaults for backward compatibility
+        remindersSent = try container.decodeIfPresent(Int.self, forKey: .remindersSent) ?? 0
+        orderInGroup = try container.decodeIfPresent(Int.self, forKey: .orderInGroup) ?? 0
+        detectedMidRun = try container.decodeIfPresent(Bool.self, forKey: .detectedMidRun) ?? false
+    }
 
     // Display summary with fallback
     var displaySummary: String {
@@ -178,6 +220,10 @@ struct ClaudeSession: Identifiable, Codable {
 
 class SessionManager {
     static let shared = SessionManager()
+
+    // App version from Version.swift
+    static let appVersion = AppVersion.current
+    static let githubRepo = "sendbird-playground/claude-code-beacon"
 
     var sessions: [ClaudeSession] = []
     var groups: [SessionGroup] = []
@@ -239,8 +285,9 @@ class SessionManager {
     // Auto-update state
     @Published var updateAvailable: Bool = false
     @Published var isUpdating: Bool = false
-    var updateCommitsBehind: Int = 0
-    var repoPath: String = ""
+    var latestVersion: String = ""
+    var releaseNotes: String = ""
+    var releaseURL: String = ""
 
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -262,97 +309,110 @@ class SessionManager {
 
         debugLog("SessionManager init complete - voiceEnabled:\(voiceEnabled) soundEnabled:\(soundEnabled)")
 
-        // Check for updates on startup
+        // Check for updates on startup and schedule hourly checks
         checkForUpdates()
+        startUpdateCheckTimer()
     }
 
     // MARK: - Auto Update
 
+    private var updateCheckTimer: Timer?
+
+    private func startUpdateCheckTimer() {
+        // Check for updates every hour (3600 seconds)
+        updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            debugLog("Hourly update check triggered")
+            self?.checkForUpdates()
+        }
+    }
+
     func checkForUpdates() {
-        DispatchQueue.global(qos: .background).async { [weak self] in
+        debugLog("Auto-update: Checking for updates via GitHub API")
+
+        // GitHub API URL for latest release
+        let urlString = "https://api.github.com/repos/\(SessionManager.githubRepo)/releases/latest"
+        guard let url = URL(string: urlString) else {
+            debugLog("Auto-update: Invalid GitHub API URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 10
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
 
-            // Find the repo path by looking for the app bundle's source
-            let possiblePaths = [
-                NSHomeDirectory() + "/repo/Beacon",
-                NSHomeDirectory() + "/Projects/Beacon",
-                NSHomeDirectory() + "/Developer/Beacon",
-                NSHomeDirectory() + "/Code/Beacon"
-            ]
-
-            var foundRepoPath: String?
-            for path in possiblePaths {
-                let gitPath = path + "/.git"
-                if FileManager.default.fileExists(atPath: gitPath) {
-                    foundRepoPath = path
-                    break
-                }
-            }
-
-            guard let repoPath = foundRepoPath else {
-                debugLog("Auto-update: Could not find Beacon git repository")
+            if let error = error {
+                debugLog("Auto-update: Network error - \(error.localizedDescription)")
                 return
             }
 
-            DispatchQueue.main.async {
-                self.repoPath = repoPath
-            }
-
-            debugLog("Auto-update: Found repo at \(repoPath)")
-
-            // Fetch latest from remote
-            let fetchProcess = Process()
-            fetchProcess.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            fetchProcess.arguments = ["-C", repoPath, "fetch", "origin", "--quiet"]
-            fetchProcess.standardOutput = FileHandle.nullDevice
-            fetchProcess.standardError = FileHandle.nullDevice
-
-            do {
-                try fetchProcess.run()
-                fetchProcess.waitUntilExit()
-            } catch {
-                debugLog("Auto-update: Failed to fetch: \(error)")
+            guard let httpResponse = response as? HTTPURLResponse else {
+                debugLog("Auto-update: Invalid response")
                 return
             }
 
-            // Check how many commits behind
-            let revListProcess = Process()
-            revListProcess.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            revListProcess.arguments = ["-C", repoPath, "rev-list", "--count", "HEAD..origin/main"]
-            let pipe = Pipe()
-            revListProcess.standardOutput = pipe
-            revListProcess.standardError = FileHandle.nullDevice
+            if httpResponse.statusCode == 404 {
+                debugLog("Auto-update: No releases found (404)")
+                return
+            }
+
+            guard httpResponse.statusCode == 200, let data = data else {
+                debugLog("Auto-update: HTTP error \(httpResponse.statusCode)")
+                return
+            }
 
             do {
-                try revListProcess.run()
-                revListProcess.waitUntilExit()
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let tagName = json["tag_name"] as? String,
+                   let htmlUrl = json["html_url"] as? String {
 
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   let count = Int(output) {
-                    debugLog("Auto-update: \(count) commits behind origin/main")
+                    // Remove 'v' prefix if present (e.g., "v1.0.1" -> "1.0.1")
+                    let remoteVersion = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
+                    let body = json["body"] as? String ?? ""
+
+                    debugLog("Auto-update: Current version: \(SessionManager.appVersion), Latest: \(remoteVersion)")
+
+                    let hasUpdate = self.isNewerVersion(remoteVersion, than: SessionManager.appVersion)
 
                     DispatchQueue.main.async {
-                        self.updateCommitsBehind = count
                         let wasAvailable = self.updateAvailable
-                        self.updateAvailable = count > 0
+                        self.updateAvailable = hasUpdate
+                        self.latestVersion = remoteVersion
+                        self.releaseNotes = body
+                        self.releaseURL = htmlUrl
 
                         // Send notification if update newly available
-                        if count > 0 && !wasAvailable {
-                            self.sendUpdateNotification(commitCount: count)
+                        if hasUpdate && !wasAvailable {
+                            self.sendUpdateNotification(version: remoteVersion)
                         }
                     }
                 }
             } catch {
-                debugLog("Auto-update: Failed to check rev-list: \(error)")
+                debugLog("Auto-update: JSON parse error - \(error)")
             }
-        }
+        }.resume()
     }
 
-    private func sendUpdateNotification(commitCount: Int) {
+    // Compare semantic versions (e.g., "1.0.1" > "1.0.0")
+    private func isNewerVersion(_ remote: String, than local: String) -> Bool {
+        let remoteComponents = remote.split(separator: ".").compactMap { Int($0) }
+        let localComponents = local.split(separator: ".").compactMap { Int($0) }
+
+        for i in 0..<max(remoteComponents.count, localComponents.count) {
+            let r = i < remoteComponents.count ? remoteComponents[i] : 0
+            let l = i < localComponents.count ? localComponents[i] : 0
+            if r > l { return true }
+            if r < l { return false }
+        }
+        return false
+    }
+
+    private func sendUpdateNotification(version: String) {
         let content = UNMutableNotificationContent()
         content.title = "Beacon Update Available"
-        content.body = "\(commitCount) new commit\(commitCount == 1 ? "" : "s"). Open Settings to update."
+        content.body = "Version \(version) is available. Open Settings to update."
         content.sound = nil
 
         let request = UNNotificationRequest(
@@ -370,97 +430,15 @@ class SessionManager {
         }
     }
 
-    func performUpdate() {
-        guard !repoPath.isEmpty else {
-            debugLog("Auto-update: No repo path set")
+    func openReleasePage() {
+        guard !releaseURL.isEmpty, let url = URL(string: releaseURL) else {
+            // Fallback to releases page
+            if let url = URL(string: "https://github.com/\(SessionManager.githubRepo)/releases") {
+                NSWorkspace.shared.open(url)
+            }
             return
         }
-
-        isUpdating = true
-        debugLog("Auto-update: Starting update from \(repoPath)")
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-
-            // Pull latest changes
-            let pullProcess = Process()
-            pullProcess.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            pullProcess.arguments = ["-C", self.repoPath, "pull", "origin", "main"]
-            let pullPipe = Pipe()
-            pullProcess.standardOutput = pullPipe
-            pullProcess.standardError = pullPipe
-
-            do {
-                try pullProcess.run()
-                pullProcess.waitUntilExit()
-
-                let pullData = pullPipe.fileHandleForReading.readDataToEndOfFile()
-                let pullOutput = String(data: pullData, encoding: .utf8) ?? ""
-                debugLog("Auto-update: git pull output: \(pullOutput)")
-
-                if pullProcess.terminationStatus != 0 {
-                    debugLog("Auto-update: git pull failed with status \(pullProcess.terminationStatus)")
-                    DispatchQueue.main.async {
-                        self.isUpdating = false
-                    }
-                    return
-                }
-            } catch {
-                debugLog("Auto-update: Failed to pull: \(error)")
-                DispatchQueue.main.async {
-                    self.isUpdating = false
-                }
-                return
-            }
-
-            // Run install.sh
-            let installProcess = Process()
-            installProcess.executableURL = URL(fileURLWithPath: "/bin/bash")
-            installProcess.arguments = ["-c", "cd '\(self.repoPath)' && ./install.sh"]
-            let installPipe = Pipe()
-            installProcess.standardOutput = installPipe
-            installProcess.standardError = installPipe
-
-            do {
-                try installProcess.run()
-                installProcess.waitUntilExit()
-
-                let installData = installPipe.fileHandleForReading.readDataToEndOfFile()
-                let installOutput = String(data: installData, encoding: .utf8) ?? ""
-                debugLog("Auto-update: install.sh output: \(installOutput)")
-
-                if installProcess.terminationStatus == 0 {
-                    debugLog("Auto-update: Update successful, restarting app")
-
-                    // Restart the app
-                    DispatchQueue.main.async {
-                        self.isUpdating = false
-                        self.updateAvailable = false
-
-                        // Relaunch the app
-                        let task = Process()
-                        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                        task.arguments = ["-n", "/Applications/Beacon.app"]
-                        try? task.run()
-
-                        // Exit current instance after a short delay
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            NSApplication.shared.terminate(nil)
-                        }
-                    }
-                } else {
-                    debugLog("Auto-update: install.sh failed with status \(installProcess.terminationStatus)")
-                    DispatchQueue.main.async {
-                        self.isUpdating = false
-                    }
-                }
-            } catch {
-                debugLog("Auto-update: Failed to run install.sh: \(error)")
-                DispatchQueue.main.async {
-                    self.isUpdating = false
-                }
-            }
-        }
+        NSWorkspace.shared.open(url)
     }
 
     // MARK: - HTTP Server for Hook Data
@@ -1941,9 +1919,10 @@ class SessionManager {
         NSLog("Scheduling reminders for session \(session.id), triggered at: \(triggeredAt)")
 
         if reminderCount == 0 {
-            // Infinite: use repeating trigger
+            // Infinite: use repeating trigger (minimum 60 seconds for repeating)
+            let interval = max(60, reminderInterval)
             let trigger = UNTimeIntervalNotificationTrigger(
-                timeInterval: TimeInterval(reminderInterval),
+                timeInterval: TimeInterval(interval),
                 repeats: true
             )
 
@@ -1957,7 +1936,7 @@ class SessionManager {
                 if let error = error {
                     NSLog("Failed to schedule infinite reminder: \(error)")
                 } else {
-                    NSLog("Infinite reminder scheduled every \(self.reminderInterval)s for session \(session.id)")
+                    NSLog("Infinite reminder scheduled every \(interval)s for session \(session.id)")
                 }
             }
         } else {
