@@ -92,19 +92,6 @@ struct SessionsPopoverView: View {
                 .frame(maxHeight: 400)
             }
 
-            Divider()
-
-            // Footer
-            HStack {
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
         }
         .frame(width: 280)
     }
