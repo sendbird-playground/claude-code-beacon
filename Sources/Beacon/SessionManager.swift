@@ -2081,8 +2081,12 @@ class SessionManager {
                 result.append((id: voice.rawValue, name: name))
             }
         }
-        // Add default option
-        result.insert((id: "", name: "System Default"), at: 0)
+        // Sort by name, with Samantha first as default
+        result.sort { v1, v2 in
+            if v1.name.lowercased().contains("samantha") { return true }
+            if v2.name.lowercased().contains("samantha") { return false }
+            return v1.name < v2.name
+        }
         return result
     }
 
@@ -2098,8 +2102,12 @@ class SessionManager {
                 result.append((id: voice.rawValue, name: name))
             }
         }
-        // Add default option
-        result.insert((id: "", name: "System Default"), at: 0)
+        // Sort by name, with Yuna first as default
+        result.sort { v1, v2 in
+            if v1.name.lowercased().contains("yuna") { return true }
+            if v2.name.lowercased().contains("yuna") { return false }
+            return v1.name < v2.name
+        }
         return result
     }
 
@@ -2113,28 +2121,41 @@ class SessionManager {
         return voiceId
     }
 
-    // Find the selected or default Korean voice
+    // Find the selected or default Korean voice (defaults to Yuna)
     private func findKoreanVoice() -> NSSpeechSynthesizer.VoiceName? {
         // Use selected voice if set
         if !selectedKoreanVoice.isEmpty {
             return NSSpeechSynthesizer.VoiceName(rawValue: selectedKoreanVoice)
         }
-        // Otherwise find any Korean voice
+        // Otherwise find Yuna or any Korean voice
         let voices = NSSpeechSynthesizer.availableVoices
+        // First try to find Yuna
+        for voice in voices {
+            if voice.rawValue.lowercased().contains("yuna") {
+                return voice
+            }
+        }
+        // Fallback to any Korean voice
         for voice in voices {
             let voiceId = voice.rawValue.lowercased()
-            if voiceId.contains("korean") || voiceId.contains("yuna") ||
-               voiceId.contains("ko_kr") || voiceId.contains("ko-kr") {
+            if voiceId.contains("korean") || voiceId.contains("ko_kr") || voiceId.contains("ko-kr") {
                 return voice
             }
         }
         return nil
     }
 
-    // Find the selected or default English voice
+    // Find the selected or default English voice (defaults to Samantha)
     private func findEnglishVoice() -> NSSpeechSynthesizer.VoiceName? {
         if !selectedEnglishVoice.isEmpty {
             return NSSpeechSynthesizer.VoiceName(rawValue: selectedEnglishVoice)
+        }
+        // Default to Samantha
+        let voices = NSSpeechSynthesizer.availableVoices
+        for voice in voices {
+            if voice.rawValue.lowercased().contains("samantha") {
+                return voice
+            }
         }
         return nil  // nil means use system default
     }

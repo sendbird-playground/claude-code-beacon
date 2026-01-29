@@ -1096,9 +1096,7 @@ struct SettingsView: View {
                 }
             }
             .formStyle(.grouped)
-            .frame(height: 120)
-
-            Divider()
+            .frame(height: 130)
 
             // Pronunciation Rules Section
             VStack(alignment: .leading, spacing: 4) {
