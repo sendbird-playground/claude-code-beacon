@@ -89,28 +89,85 @@ if [ "$BUILD_PKG" = true ]; then
 
     # Create a temporary directory for pkg build
     PKG_ROOT="$OUTPUT_DIR/pkg-root"
-    rm -rf "$PKG_ROOT"
+    PKG_SCRIPTS="$OUTPUT_DIR/pkg-scripts"
+    rm -rf "$PKG_ROOT" "$PKG_SCRIPTS"
     mkdir -p "$PKG_ROOT/Applications"
+    mkdir -p "$PKG_SCRIPTS"
 
     # Copy app bundle to pkg root
     cp -r "$OUTPUT_DIR/$BUNDLE_NAME" "$PKG_ROOT/Applications/"
 
-    # Build the component package
+    # Create postinstall script to set up LaunchAgent
+    cat > "$PKG_SCRIPTS/postinstall" << 'POSTINSTALL'
+#!/bin/bash
+# Get the installing user (not root)
+INSTALL_USER="${USER}"
+if [ "$INSTALL_USER" = "root" ]; then
+    INSTALL_USER=$(stat -f "%Su" /dev/console)
+fi
+USER_HOME=$(eval echo "~$INSTALL_USER")
+
+LAUNCHAGENT_DIR="$USER_HOME/Library/LaunchAgents"
+LAUNCHAGENT_PLIST="$LAUNCHAGENT_DIR/com.sendbird.Beacon.plist"
+
+# Create LaunchAgents directory if needed
+mkdir -p "$LAUNCHAGENT_DIR"
+chown "$INSTALL_USER" "$LAUNCHAGENT_DIR"
+
+# Create LaunchAgent plist
+cat > "$LAUNCHAGENT_PLIST" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sendbird.Beacon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/Beacon.app/Contents/MacOS/Beacon</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+</dict>
+</plist>
+EOF
+
+chown "$INSTALL_USER" "$LAUNCHAGENT_PLIST"
+
+# Load LaunchAgent as the user (will start on next login if GUI not available)
+su "$INSTALL_USER" -c "launchctl load '$LAUNCHAGENT_PLIST'" 2>/dev/null || true
+
+exit 0
+POSTINSTALL
+    chmod +x "$PKG_SCRIPTS/postinstall"
+
+    # Build the component package with scripts
     pkgbuild \
         --root "$PKG_ROOT" \
+        --scripts "$PKG_SCRIPTS" \
         --identifier "$BUNDLE_ID" \
         --version "$VERSION" \
         --install-location "/" \
         "$OUTPUT_DIR/$PKG_NAME"
 
     # Clean up
-    rm -rf "$PKG_ROOT"
+    rm -rf "$PKG_ROOT" "$PKG_SCRIPTS"
 
     echo ""
     echo "Pkg installer created at: $OUTPUT_DIR/$PKG_NAME"
     echo ""
     echo "To install:"
     echo "  open $OUTPUT_DIR/$PKG_NAME"
+    echo ""
+    echo "The pkg will:"
+    echo "  - Install Beacon.app to /Applications"
+    echo "  - Set up auto-restart service (LaunchAgent)"
 else
     echo ""
     echo "To run the app:"
