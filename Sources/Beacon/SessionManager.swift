@@ -2173,26 +2173,44 @@ class SessionManager {
         }
     }
 
-    func testNotification() {
-        debugLog("Testing notification...")
-        let content = UNMutableNotificationContent()
-        content.title = "Beacon Test Notification"
-        content.body = "This is a test notification from Beacon"
-        content.sound = nil
-        content.categoryIdentifier = SessionManager.notificationCategoryId
+    func testAlerts() {
+        debugLog("Testing alerts with current settings - notification:\(notificationEnabled) sound:\(soundEnabled) voice:\(voiceEnabled)")
 
-        let request = UNNotificationRequest(
-            identifier: "test-notification-\(Date().timeIntervalSince1970)",
-            content: content,
-            trigger: nil
-        )
+        // Test notification if enabled
+        if notificationEnabled {
+            let content = UNMutableNotificationContent()
+            content.title = "Beacon Test"
+            content.body = "Test alert from Beacon"
+            content.sound = nil
+            content.userInfo = ["isTest": true]
+            content.categoryIdentifier = SessionManager.notificationCategoryId
 
-        UNUserNotificationCenter.current().add(request) { error in
-            if let error = error {
-                debugLog("Test notification failed: \(error)")
-            } else {
-                debugLog("Test notification sent successfully")
+            // Use a time trigger instead of immediate to ensure proper icon loading
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
+
+            let request = UNNotificationRequest(
+                identifier: "test-notification-\(Date().timeIntervalSince1970)",
+                content: content,
+                trigger: trigger
+            )
+
+            UNUserNotificationCenter.current().add(request) { error in
+                if let error = error {
+                    debugLog("Test notification failed: \(error)")
+                } else {
+                    debugLog("Test notification sent successfully")
+                }
             }
+        }
+
+        // Test sound if enabled
+        if soundEnabled {
+            playAlertSound()
+        }
+
+        // Test voice if enabled
+        if voiceEnabled {
+            testVoice()
         }
     }
 
