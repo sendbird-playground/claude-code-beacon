@@ -1131,7 +1131,8 @@ struct SettingsView: View {
                             .frame(width: 60, alignment: .leading)
                         Picker("", selection: $selectedEnglishVoice) {
                             ForEach(sessionManager.getEnglishVoices(), id: \.id) { voice in
-                                Text(voice.name).tag(voice.id)
+                                let isDefault = voice.name.lowercased().contains("samantha")
+                                Text(isDefault ? "\(voice.name) (Default)" : voice.name).tag(voice.id)
                             }
                         }
                         .labelsHidden()
@@ -1145,7 +1146,8 @@ struct SettingsView: View {
                             .frame(width: 60, alignment: .leading)
                         Picker("", selection: $selectedKoreanVoice) {
                             ForEach(sessionManager.getKoreanVoices(), id: \.id) { voice in
-                                Text(voice.name).tag(voice.id)
+                                let isDefault = voice.name.lowercased().contains("yuna")
+                                Text(isDefault ? "\(voice.name) (Default)" : voice.name).tag(voice.id)
                             }
                         }
                         .labelsHidden()
