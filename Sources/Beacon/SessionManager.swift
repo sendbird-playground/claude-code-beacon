@@ -1993,9 +1993,14 @@ class SessionManager {
 
         // Send macOS notification if enabled
         if shouldNotify {
+            // Format completion time
+            let timeFormatter = DateFormatter()
+            timeFormatter.dateFormat = "h:mm a"
+            let completionTime = timeFormatter.string(from: triggerTime)
+
             let content = UNMutableNotificationContent()
             content.title = "Claude Task Completed"
-            content.body = "\(session.terminalInfo) · \(session.projectName)"
+            content.body = "\(session.terminalInfo) · \(session.projectName) · \(completionTime)"
             content.sound = nil  // We handle sound separately
             content.userInfo = ["sessionId": session.id]
             content.categoryIdentifier = SessionManager.notificationCategoryId
