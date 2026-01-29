@@ -1131,30 +1131,45 @@ struct SettingsView: View {
 
             Divider()
 
-            // Voice Selection Section (bottom)
-            Form {
-                Section("Voice Selection") {
-                    Picker("English Voice", selection: $selectedEnglishVoice) {
-                        ForEach(sessionManager.getEnglishVoices(), id: \.id) { voice in
-                            Text(voice.name).tag(voice.id)
+            // Voice Selection Section (bottom, fixed height)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Voice Selection")
+                    .font(.headline)
+                    .padding(.horizontal)
+                    .padding(.top, 12)
+
+                VStack(spacing: 12) {
+                    HStack {
+                        Text("English")
+                            .frame(width: 60, alignment: .leading)
+                        Picker("", selection: $selectedEnglishVoice) {
+                            ForEach(sessionManager.getEnglishVoices(), id: \.id) { voice in
+                                Text(voice.name).tag(voice.id)
+                            }
                         }
-                    }
-                    .onChange(of: selectedEnglishVoice) { newValue in
-                        sessionManager.selectedEnglishVoice = newValue
+                        .labelsHidden()
+                        .onChange(of: selectedEnglishVoice) { newValue in
+                            sessionManager.selectedEnglishVoice = newValue
+                        }
                     }
 
-                    Picker("Korean Voice", selection: $selectedKoreanVoice) {
-                        ForEach(sessionManager.getKoreanVoices(), id: \.id) { voice in
-                            Text(voice.name).tag(voice.id)
+                    HStack {
+                        Text("Korean")
+                            .frame(width: 60, alignment: .leading)
+                        Picker("", selection: $selectedKoreanVoice) {
+                            ForEach(sessionManager.getKoreanVoices(), id: \.id) { voice in
+                                Text(voice.name).tag(voice.id)
+                            }
+                        }
+                        .labelsHidden()
+                        .onChange(of: selectedKoreanVoice) { newValue in
+                            sessionManager.selectedKoreanVoice = newValue
                         }
                     }
-                    .onChange(of: selectedKoreanVoice) { newValue in
-                        sessionManager.selectedKoreanVoice = newValue
-                    }
                 }
+                .padding(.horizontal)
+                .padding(.bottom, 12)
             }
-            .formStyle(.grouped)
-            .frame(height: 130)
         }
     }
 
