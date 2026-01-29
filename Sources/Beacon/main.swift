@@ -857,142 +857,36 @@ struct SettingsView: View {
         _pronunciationRules = State(initialValue: sessionManager.pronunciationRules)
     }
 
+    @State private var selectedTab = 0
+
     var body: some View {
-        Form {
-            Section("Alerts") {
-                Toggle("Notification", isOn: $notificationEnabled)
-                    .onChange(of: notificationEnabled) { new in
-                        sessionManager.notificationEnabled = new
-                    }
-                Toggle("Sound", isOn: $soundEnabled)
-                    .onChange(of: soundEnabled) { new in
-                        sessionManager.soundEnabled = new
-                    }
-                Toggle("Voice", isOn: $voiceEnabled)
-                    .onChange(of: voiceEnabled) { new in
-                        sessionManager.voiceEnabled = new
-                    }
+        TabView(selection: $selectedTab) {
+            // General Tab - Alerts, Reminders, About
+            generalTab
+                .tabItem {
+                    Label("General", systemImage: "gear")
+                }
+                .tag(0)
 
-                Button("Test Alerts") {
-                    sessionManager.testAlerts()
+            // Groups Tab
+            groupsTab
+                .tabItem {
+                    Label("Groups", systemImage: "folder")
                 }
-            }
+                .tag(1)
 
-            Section("Reminders") {
-                Toggle("Enabled", isOn: $reminderEnabled)
-                    .onChange(of: reminderEnabled) { new in
-                        sessionManager.reminderEnabled = new
-                    }
-
-                Picker("Interval", selection: $reminderInterval) {
-                    Text("1 min").tag(60)
-                    Text("2 min").tag(120)
-                    Text("5 min").tag(300)
-                    Text("10 min").tag(600)
+            // Pronunciation Tab
+            pronunciationTab
+                .tabItem {
+                    Label("Voice", systemImage: "waveform")
                 }
-                .onChange(of: reminderInterval) { new in
-                    sessionManager.reminderInterval = new
-                }
-
-                Picker("Count", selection: $reminderCount) {
-                    Text("1").tag(1)
-                    Text("2").tag(2)
-                    Text("3").tag(3)
-                    Text("5").tag(5)
-                    Text("∞ Infinite").tag(0)
-                }
-                .onChange(of: reminderCount) { new in
-                    sessionManager.reminderCount = new
-                }
-            }
-
-            Section("Groups") {
-                ForEach(groups.sorted { $0.order < $1.order }, id: \.id) { group in
-                    GroupSettingsRow(
-                        group: group,
-                        onUpdateName: { newName in
-                            sessionManager.updateGroup(id: group.id, name: newName)
-                            groups = sessionManager.groups
-                        },
-                        onUpdateColor: { newColor in
-                            sessionManager.updateGroup(id: group.id, colorHex: newColor)
-                            groups = sessionManager.groups
-                        },
-                        onDelete: {
-                            deleteGroup(group)
-                        }
-                    )
-                }
-
-                Button("Add Group...") {
-                    showingAddGroup = true
-                }
-            }
-
-            Section("Pronunciation Rules") {
-                ForEach(Array(pronunciationRules.keys.sorted()), id: \.self) { pattern in
-                    PronunciationRuleRow(
-                        pattern: pattern,
-                        pronunciation: pronunciationRules[pattern] ?? "",
-                        onUpdatePattern: { newPattern in
-                            let oldPronunciation = pronunciationRules[pattern] ?? ""
-                            sessionManager.removePronunciationRule(pattern: pattern)
-                            sessionManager.addPronunciationRule(pattern: newPattern, pronunciation: oldPronunciation)
-                            pronunciationRules = sessionManager.pronunciationRules
-                        },
-                        onUpdatePronunciation: { newPronunciation in
-                            sessionManager.addPronunciationRule(pattern: pattern, pronunciation: newPronunciation)
-                            pronunciationRules = sessionManager.pronunciationRules
-                        },
-                        onDelete: {
-                            deleteRule(pattern)
-                        }
-                    )
-                }
-
-                Button("Add Rule...") {
-                    showingAddRule = true
-                }
-            }
-
-            // About section
-            Section("About") {
-                HStack {
-                    Text("Version")
-                    Spacer()
-                    Text(SessionManager.appVersion)
-                        .foregroundColor(.secondary)
-                }
-
-                if sessionManager.updateAvailable {
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text("Version \(sessionManager.latestVersion) available")
-                                .font(.headline)
-                            if !sessionManager.releaseNotes.isEmpty {
-                                Text(sessionManager.releaseNotes.prefix(100) + (sessionManager.releaseNotes.count > 100 ? "..." : ""))
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(2)
-                            }
-                        }
-                        Spacer()
-                        Button("View Release") {
-                            sessionManager.openReleasePage()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
-            }
+                .tag(2)
         }
-        .formStyle(.grouped)
-        .padding()
+        .frame(minWidth: 400, minHeight: 350)
         .background(
-            // Invisible tap area to dismiss keyboard/resign focus when clicking outside text fields
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    // Resign first responder to trigger focus loss and save edits
                     NSApp.keyWindow?.makeFirstResponder(nil)
                 }
         )
@@ -1046,6 +940,176 @@ struct SettingsView: View {
         .onDisappear {
             // Resign first responder when settings view closes to save any pending edits
             NSApp.keyWindow?.makeFirstResponder(nil)
+        }
+    }
+
+    // MARK: - General Tab
+
+    private var generalTab: some View {
+        Form {
+            Section("Alerts") {
+                Toggle("Notification", isOn: $notificationEnabled)
+                    .onChange(of: notificationEnabled) { new in
+                        sessionManager.notificationEnabled = new
+                    }
+                Toggle("Sound", isOn: $soundEnabled)
+                    .onChange(of: soundEnabled) { new in
+                        sessionManager.soundEnabled = new
+                    }
+                Toggle("Voice", isOn: $voiceEnabled)
+                    .onChange(of: voiceEnabled) { new in
+                        sessionManager.voiceEnabled = new
+                    }
+
+                Button("Test Alerts") {
+                    sessionManager.testAlerts()
+                }
+            }
+
+            Section("Reminders") {
+                Toggle("Enabled", isOn: $reminderEnabled)
+                    .onChange(of: reminderEnabled) { new in
+                        sessionManager.reminderEnabled = new
+                    }
+
+                Picker("Interval", selection: $reminderInterval) {
+                    Text("1 min").tag(60)
+                    Text("2 min").tag(120)
+                    Text("5 min").tag(300)
+                    Text("10 min").tag(600)
+                }
+                .onChange(of: reminderInterval) { new in
+                    sessionManager.reminderInterval = new
+                }
+
+                Picker("Count", selection: $reminderCount) {
+                    Text("1").tag(1)
+                    Text("2").tag(2)
+                    Text("3").tag(3)
+                    Text("5").tag(5)
+                    Text("∞ Infinite").tag(0)
+                }
+                .onChange(of: reminderCount) { new in
+                    sessionManager.reminderCount = new
+                }
+            }
+
+            Section("About") {
+                HStack {
+                    Text("Version")
+                    Spacer()
+                    Text(SessionManager.appVersion)
+                        .foregroundColor(.secondary)
+                }
+
+                if sessionManager.updateAvailable {
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Version \(sessionManager.latestVersion) available")
+                                .font(.headline)
+                            if !sessionManager.releaseNotes.isEmpty {
+                                Text(sessionManager.releaseNotes.prefix(100) + (sessionManager.releaseNotes.count > 100 ? "..." : ""))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        Spacer()
+                        Button("View Release") {
+                            sessionManager.openReleasePage()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - Groups Tab
+
+    private var groupsTab: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(groups.sorted { $0.order < $1.order }, id: \.id) { group in
+                        GroupSettingsRow(
+                            group: group,
+                            onUpdateName: { newName in
+                                sessionManager.updateGroup(id: group.id, name: newName)
+                                groups = sessionManager.groups
+                            },
+                            onUpdateColor: { newColor in
+                                sessionManager.updateGroup(id: group.id, colorHex: newColor)
+                                groups = sessionManager.groups
+                            },
+                            onDelete: {
+                                deleteGroup(group)
+                            }
+                        )
+                        .padding(.horizontal)
+                    }
+                }
+                .padding(.vertical)
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Add Group...") {
+                    showingAddGroup = true
+                }
+                .padding()
+            }
+        }
+    }
+
+    // MARK: - Pronunciation Tab
+
+    private var pronunciationTab: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(Array(pronunciationRules.keys.sorted()), id: \.self) { pattern in
+                        PronunciationRuleRow(
+                            pattern: pattern,
+                            pronunciation: pronunciationRules[pattern] ?? "",
+                            onUpdatePattern: { newPattern in
+                                let oldPronunciation = pronunciationRules[pattern] ?? ""
+                                sessionManager.removePronunciationRule(pattern: pattern)
+                                sessionManager.addPronunciationRule(pattern: newPattern, pronunciation: oldPronunciation)
+                                pronunciationRules = sessionManager.pronunciationRules
+                            },
+                            onUpdatePronunciation: { newPronunciation in
+                                sessionManager.addPronunciationRule(pattern: pattern, pronunciation: newPronunciation)
+                                pronunciationRules = sessionManager.pronunciationRules
+                            },
+                            onDelete: {
+                                deleteRule(pattern)
+                            }
+                        )
+                        .padding(.horizontal)
+                    }
+
+                    if pronunciationRules.isEmpty {
+                        Text("No pronunciation rules")
+                            .foregroundColor(.secondary)
+                            .padding()
+                    }
+                }
+                .padding(.vertical)
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Add Rule...") {
+                    showingAddRule = true
+                }
+                .padding()
+            }
         }
     }
 
@@ -1330,19 +1394,43 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     // Handle notification click or action button
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
-        if let sessionId = response.notification.request.content.userInfo["sessionId"] as? String {
+        let userInfo = response.notification.request.content.userInfo
+        let isReminder = userInfo["isReminder"] as? Bool ?? false
+
+        // Debug: write to file to verify handler is called
+        let logPath = NSHomeDirectory() + "/beacon_notification_debug.log"
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let logLine = "\(timestamp) - didReceive called, isReminder: \(isReminder), action: \(response.actionIdentifier)\n"
+        if let data = logLine.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logPath) {
+                if let handle = FileHandle(forWritingAtPath: logPath) {
+                    handle.seekToEndOfFile()
+                    handle.write(data)
+                    handle.closeFile()
+                }
+            } else {
+                FileManager.default.createFile(atPath: logPath, contents: data)
+            }
+        }
+
+        NSLog("Notification response received - isReminder: \(isReminder), userInfo: \(userInfo)")
+
+        if let sessionId = userInfo["sessionId"] as? String {
             NSLog("Notification action for session: \(sessionId), action: \(response.actionIdentifier)")
 
             // Handle click, Show action, or dismiss - all acknowledge the session
             if response.actionIdentifier == UNNotificationDefaultActionIdentifier ||
                response.actionIdentifier == SessionManager.showActionId {
                 // User clicked or tapped Show - navigate to session
+                NSLog("Navigating to session: \(sessionId)")
                 sessionManager.navigateToSession(id: sessionId)
                 sessionManager.acknowledgeSession(id: sessionId)
             } else if response.actionIdentifier == UNNotificationDismissActionIdentifier {
                 // User dismissed the notification - just acknowledge (cancel reminders)
                 sessionManager.acknowledgeSession(id: sessionId)
             }
+        } else {
+            NSLog("No sessionId found in notification userInfo")
         }
         completionHandler()
     }

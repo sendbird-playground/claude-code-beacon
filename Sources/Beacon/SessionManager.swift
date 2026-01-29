@@ -1252,9 +1252,12 @@ class SessionManager {
 
         // Special handling for PyCharm - use stored window name if available
         if appName == "PyCharm" {
+            NSLog("PyCharm navigation - pycharmWindow: \(session.pycharmWindow ?? "nil"), projectName: \(session.projectName)")
             if let windowName = session.pycharmWindow, !windowName.isEmpty {
+                NSLog("Using stored window name: \(windowName)")
                 activatePyCharmWindowByName(windowName: windowName)
             } else {
+                NSLog("Using project name search")
                 activatePyCharmWindow(projectName: session.projectName, workingDirectory: session.workingDirectory)
             }
             return
@@ -1324,6 +1327,7 @@ class SessionManager {
     }
 
     func activatePyCharmWindowByName(windowName: String) {
+        NSLog("activatePyCharmWindowByName: searching for '\(windowName)'")
         let script = """
             tell application "System Events"
                 tell process "pycharm"
@@ -1332,16 +1336,18 @@ class SessionManager {
                         if wName contains "\(windowName)" then
                             tell application "PyCharm" to activate
                             perform action "AXRaise" of w
-                            return
+                            return "found"
                         end if
                     end repeat
                 end tell
             end tell
             tell application "PyCharm" to activate
+            return "not found, activated PyCharm"
             """
         var error: NSDictionary?
         if let appleScript = NSAppleScript(source: script) {
-            appleScript.executeAndReturnError(&error)
+            let result = appleScript.executeAndReturnError(&error)
+            NSLog("activatePyCharmWindowByName result: \(result.stringValue ?? "nil"), error: \(error ?? [:])")
         }
     }
 
