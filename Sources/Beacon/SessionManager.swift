@@ -2053,6 +2053,9 @@ class SessionManager {
 
     /// Re-schedule reminders for sessions that were persisted (e.g., after app restart)
     func restoreReminders() {
+        // First, clean up any orphaned reminders from previous app runs
+        cleanupOrphanedReminders()
+
         for session in sessions where session.status == .completed {
             guard let triggeredAt = session.alertTriggeredAt else { continue }
 
@@ -2063,6 +2066,39 @@ class SessionManager {
             if shouldRemind {
                 NSLog("Restoring reminders for session \(session.id), originally triggered at \(triggeredAt)")
                 scheduleReminders(for: session, triggeredAt: triggeredAt)
+            }
+        }
+    }
+
+    /// Clean up orphaned reminders - reminders for sessions that no longer exist or are acknowledged
+    private func cleanupOrphanedReminders() {
+        // Get all valid session IDs that should have reminders (only .completed status)
+        let validSessionIds = Set(sessions.filter { $0.status == .completed }.map { $0.id })
+
+        UNUserNotificationCenter.current().getPendingNotificationRequests { [weak self] requests in
+            guard self != nil else { return }
+
+            var orphanedIds: [String] = []
+
+            for request in requests {
+                // Check if it's a reminder notification
+                if request.identifier.contains("-reminder-") {
+                    // Extract session ID from reminder identifier (format: "sessionId-reminder-X" or "sessionId-reminder-infinite")
+                    let parts = request.identifier.components(separatedBy: "-reminder-")
+                    if let sessionId = parts.first {
+                        // Check if session exists and is in completed status
+                        if !validSessionIds.contains(sessionId) {
+                            orphanedIds.append(request.identifier)
+                            NSLog("Found orphaned reminder: \(request.identifier) (session \(sessionId) not found or acknowledged)")
+                        }
+                    }
+                }
+            }
+
+            if !orphanedIds.isEmpty {
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: orphanedIds)
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: orphanedIds)
+                NSLog("Cleaned up \(orphanedIds.count) orphaned reminders")
             }
         }
     }
