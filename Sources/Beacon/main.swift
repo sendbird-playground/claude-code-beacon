@@ -683,10 +683,13 @@ class SessionsViewModel: ObservableObject {
         _ = tick  // Force refresh
         if let alertTime = session.alertTriggeredAt {
             let elapsed = Int(Date().timeIntervalSince(alertTime))
-            return "Last alert: \(formatElapsed(elapsed, recent: elapsed < 60))"
+            return "Last task: \(formatElapsed(elapsed, recent: elapsed < 60))"
+        } else if session.detectedMidRun {
+            // Session was already running when Beacon started, unknown start time
+            return "Last task: unknown"
         } else {
             let elapsed = Int(Date().timeIntervalSince(session.createdAt))
-            return "Started: \(formatElapsed(elapsed, recent: false))"
+            return "Last task: \(formatElapsed(elapsed, recent: false))"
         }
     }
 
@@ -936,6 +939,40 @@ struct SettingsView: View {
 
                 Button("Add Rule...") {
                     showingAddRule = true
+                }
+            }
+
+            // Update section at the bottom
+            Section("Update") {
+                if sessionManager.updateAvailable {
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("\(sessionManager.updateCommitsBehind) new commit\(sessionManager.updateCommitsBehind == 1 ? "" : "s") available")
+                                .font(.headline)
+                            Text("Click to update and restart")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        if sessionManager.isUpdating {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        } else {
+                            Button("Update") {
+                                sessionManager.performUpdate()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    }
+                } else {
+                    HStack {
+                        Text("Beacon is up to date")
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button("Check") {
+                            sessionManager.checkForUpdates()
+                        }
+                    }
                 }
             }
         }
@@ -1319,6 +1356,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func showPopover() {
         if let button = statusItem.button {
+            // Ensure the button has valid bounds (can be invalid right after app launch)
+            guard button.bounds.width > 0 && button.bounds.height > 0 else {
+                // Retry after a short delay if bounds not ready
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    self?.showPopover()
+                }
+                return
+            }
+
             viewModel.refresh()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
 

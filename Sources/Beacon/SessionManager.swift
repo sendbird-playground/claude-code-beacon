@@ -3,6 +3,27 @@ import AppKit
 import UserNotifications
 import Network
 
+// MARK: - Debug Logging
+
+private let debugLogPath = URL(fileURLWithPath: "/tmp/beacon_debug.log")
+
+private func debugLog(_ message: String) {
+    let timestamp = ISO8601DateFormatter().string(from: Date())
+    let logLine = "[\(timestamp)] \(message)\n"
+    NSLog(message)
+    if let data = logLine.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: debugLogPath.path) {
+            if let handle = try? FileHandle(forWritingTo: debugLogPath) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
+            }
+        } else {
+            try? data.write(to: debugLogPath)
+        }
+    }
+}
+
 // MARK: - Models
 
 enum SessionStatus: String, Codable {
@@ -91,6 +112,9 @@ struct ClaudeSession: Identifiable, Codable {
     // Manual ordering within group (lower = higher in list)
     var orderInGroup: Int = 0
 
+    // True if session was detected while already running (not tracked from start)
+    var detectedMidRun: Bool = false
+
     init(
         id: String = UUID().uuidString,
         projectName: String,
@@ -114,7 +138,8 @@ struct ClaudeSession: Identifiable, Codable {
         groupId: String? = nil,
         alertTriggeredAt: Date? = nil,
         remindersSent: Int = 0,
-        orderInGroup: Int = 0
+        orderInGroup: Int = 0,
+        detectedMidRun: Bool = false
     ) {
         self.id = id
         self.projectName = projectName
@@ -139,6 +164,7 @@ struct ClaudeSession: Identifiable, Codable {
         self.alertTriggeredAt = alertTriggeredAt
         self.remindersSent = remindersSent
         self.orderInGroup = orderInGroup
+        self.detectedMidRun = detectedMidRun
     }
 
 
@@ -210,6 +236,12 @@ class SessionManager {
     // Track reminder counts per session
     private var reminderCounts: [String: Int] = [:]
 
+    // Auto-update state
+    @Published var updateAvailable: Bool = false
+    @Published var isUpdating: Bool = false
+    var updateCommitsBehind: Int = 0
+    var repoPath: String = ""
+
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let beaconDir = appSupport.appendingPathComponent("Beacon")
@@ -218,6 +250,8 @@ class SessionManager {
         settingsURL = beaconDir.appendingPathComponent("settings.json")
         groupsURL = beaconDir.appendingPathComponent("groups.json")
 
+        debugLog("SessionManager init starting")
+
         loadSessions()
         loadGroups()
         loadSettings()
@@ -225,6 +259,208 @@ class SessionManager {
         requestNotificationPermission()
         startHttpServer()
         restoreReminders()
+
+        debugLog("SessionManager init complete - voiceEnabled:\(voiceEnabled) soundEnabled:\(soundEnabled)")
+
+        // Check for updates on startup
+        checkForUpdates()
+    }
+
+    // MARK: - Auto Update
+
+    func checkForUpdates() {
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            guard let self = self else { return }
+
+            // Find the repo path by looking for the app bundle's source
+            let possiblePaths = [
+                NSHomeDirectory() + "/repo/Beacon",
+                NSHomeDirectory() + "/Projects/Beacon",
+                NSHomeDirectory() + "/Developer/Beacon",
+                NSHomeDirectory() + "/Code/Beacon"
+            ]
+
+            var foundRepoPath: String?
+            for path in possiblePaths {
+                let gitPath = path + "/.git"
+                if FileManager.default.fileExists(atPath: gitPath) {
+                    foundRepoPath = path
+                    break
+                }
+            }
+
+            guard let repoPath = foundRepoPath else {
+                debugLog("Auto-update: Could not find Beacon git repository")
+                return
+            }
+
+            DispatchQueue.main.async {
+                self.repoPath = repoPath
+            }
+
+            debugLog("Auto-update: Found repo at \(repoPath)")
+
+            // Fetch latest from remote
+            let fetchProcess = Process()
+            fetchProcess.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            fetchProcess.arguments = ["-C", repoPath, "fetch", "origin", "--quiet"]
+            fetchProcess.standardOutput = FileHandle.nullDevice
+            fetchProcess.standardError = FileHandle.nullDevice
+
+            do {
+                try fetchProcess.run()
+                fetchProcess.waitUntilExit()
+            } catch {
+                debugLog("Auto-update: Failed to fetch: \(error)")
+                return
+            }
+
+            // Check how many commits behind
+            let revListProcess = Process()
+            revListProcess.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            revListProcess.arguments = ["-C", repoPath, "rev-list", "--count", "HEAD..origin/main"]
+            let pipe = Pipe()
+            revListProcess.standardOutput = pipe
+            revListProcess.standardError = FileHandle.nullDevice
+
+            do {
+                try revListProcess.run()
+                revListProcess.waitUntilExit()
+
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   let count = Int(output) {
+                    debugLog("Auto-update: \(count) commits behind origin/main")
+
+                    DispatchQueue.main.async {
+                        self.updateCommitsBehind = count
+                        let wasAvailable = self.updateAvailable
+                        self.updateAvailable = count > 0
+
+                        // Send notification if update newly available
+                        if count > 0 && !wasAvailable {
+                            self.sendUpdateNotification(commitCount: count)
+                        }
+                    }
+                }
+            } catch {
+                debugLog("Auto-update: Failed to check rev-list: \(error)")
+            }
+        }
+    }
+
+    private func sendUpdateNotification(commitCount: Int) {
+        let content = UNMutableNotificationContent()
+        content.title = "Beacon Update Available"
+        content.body = "\(commitCount) new commit\(commitCount == 1 ? "" : "s"). Open Settings to update."
+        content.sound = nil
+
+        let request = UNNotificationRequest(
+            identifier: "beacon-update",
+            content: content,
+            trigger: nil
+        )
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                debugLog("Failed to send update notification: \(error)")
+            } else {
+                debugLog("Update notification sent")
+            }
+        }
+    }
+
+    func performUpdate() {
+        guard !repoPath.isEmpty else {
+            debugLog("Auto-update: No repo path set")
+            return
+        }
+
+        isUpdating = true
+        debugLog("Auto-update: Starting update from \(repoPath)")
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            // Pull latest changes
+            let pullProcess = Process()
+            pullProcess.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            pullProcess.arguments = ["-C", self.repoPath, "pull", "origin", "main"]
+            let pullPipe = Pipe()
+            pullProcess.standardOutput = pullPipe
+            pullProcess.standardError = pullPipe
+
+            do {
+                try pullProcess.run()
+                pullProcess.waitUntilExit()
+
+                let pullData = pullPipe.fileHandleForReading.readDataToEndOfFile()
+                let pullOutput = String(data: pullData, encoding: .utf8) ?? ""
+                debugLog("Auto-update: git pull output: \(pullOutput)")
+
+                if pullProcess.terminationStatus != 0 {
+                    debugLog("Auto-update: git pull failed with status \(pullProcess.terminationStatus)")
+                    DispatchQueue.main.async {
+                        self.isUpdating = false
+                    }
+                    return
+                }
+            } catch {
+                debugLog("Auto-update: Failed to pull: \(error)")
+                DispatchQueue.main.async {
+                    self.isUpdating = false
+                }
+                return
+            }
+
+            // Run install.sh
+            let installProcess = Process()
+            installProcess.executableURL = URL(fileURLWithPath: "/bin/bash")
+            installProcess.arguments = ["-c", "cd '\(self.repoPath)' && ./install.sh"]
+            let installPipe = Pipe()
+            installProcess.standardOutput = installPipe
+            installProcess.standardError = installPipe
+
+            do {
+                try installProcess.run()
+                installProcess.waitUntilExit()
+
+                let installData = installPipe.fileHandleForReading.readDataToEndOfFile()
+                let installOutput = String(data: installData, encoding: .utf8) ?? ""
+                debugLog("Auto-update: install.sh output: \(installOutput)")
+
+                if installProcess.terminationStatus == 0 {
+                    debugLog("Auto-update: Update successful, restarting app")
+
+                    // Restart the app
+                    DispatchQueue.main.async {
+                        self.isUpdating = false
+                        self.updateAvailable = false
+
+                        // Relaunch the app
+                        let task = Process()
+                        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                        task.arguments = ["-n", "/Applications/Beacon.app"]
+                        try? task.run()
+
+                        // Exit current instance after a short delay
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            NSApplication.shared.terminate(nil)
+                        }
+                    }
+                } else {
+                    debugLog("Auto-update: install.sh failed with status \(installProcess.terminationStatus)")
+                    DispatchQueue.main.async {
+                        self.isUpdating = false
+                    }
+                }
+            } catch {
+                debugLog("Auto-update: Failed to run install.sh: \(error)")
+                DispatchQueue.main.async {
+                    self.isUpdating = false
+                }
+            }
+        }
     }
 
     // MARK: - HTTP Server for Hook Data
@@ -557,7 +793,8 @@ class SessionManager {
                     weztermPane: process.weztermPane,
                     ttyName: process.ttyName,
                     pycharmWindow: pycharmWindow,
-                    groupId: inheritedGroupId
+                    groupId: inheritedGroupId,
+                    detectedMidRun: true  // Session was already running when detected
                 )
                 sessions.insert(session, at: 0)
                 saveSessions()
@@ -1570,8 +1807,55 @@ class SessionManager {
         UNUserNotificationCenter.current().setNotificationCategories([category])
     }
 
+    // Check if Do Not Disturb / Focus mode is enabled
+    private func isDNDEnabled() -> Bool {
+        // Check modern Focus mode (macOS Monterey+)
+        if let focusDefaults = UserDefaults(suiteName: "com.apple.controlcenter") {
+            // Focus mode stores state in various keys
+            if focusDefaults.bool(forKey: "NSStatusItem Visible FocusModes") {
+                // Focus indicator is visible, but we need to check if actually active
+            }
+        }
+
+        // Check legacy DND setting
+        if let ncDefaults = UserDefaults(suiteName: "com.apple.notificationcenterui") {
+            if ncDefaults.bool(forKey: "doNotDisturb") {
+                return true
+            }
+        }
+
+        // Check Focus mode via assertions file
+        let assertionsPath = NSHomeDirectory() + "/Library/DoNotDisturb/DB/Assertions.json"
+        if FileManager.default.fileExists(atPath: assertionsPath) {
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: assertionsPath)),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let store = json["data"] as? [[String: Any]] {
+                // If there are active assertions, Focus is enabled
+                if !store.isEmpty {
+                    return true
+                }
+            }
+        }
+
+        // Check ModeConfigurations for active focus
+        let modeConfigPath = NSHomeDirectory() + "/Library/DoNotDisturb/DB/ModeConfigurations.json"
+        if FileManager.default.fileExists(atPath: modeConfigPath) {
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: modeConfigPath)),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let modeData = json["data"] as? [[String: Any]] {
+                for mode in modeData {
+                    if let isActive = mode["isActive"] as? Bool, isActive {
+                        return true
+                    }
+                }
+            }
+        }
+
+        return false
+    }
+
     func sendCompletionNotification(for session: ClaudeSession) {
-        NSLog("sendCompletionNotification called for: \(session.projectName)")
+        debugLog("sendCompletionNotification called for: \(session.projectName)")
         // Priority: session > group > global
         let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
 
@@ -1579,6 +1863,13 @@ class SessionManager {
         let shouldSound = session.soundOverride ?? group?.soundOverride ?? soundEnabled
         let shouldVoice = session.voiceOverride ?? group?.voiceOverride ?? voiceEnabled
         let shouldRemind = session.reminderOverride ?? group?.reminderOverride ?? reminderEnabled
+
+        // Check DND/Focus mode
+        let dndActive = isDNDEnabled()
+        debugLog("DND/Focus mode active: \(dndActive)")
+
+        debugLog("Settings - notify:\(shouldNotify) sound:\(shouldSound) voice:\(shouldVoice) remind:\(shouldRemind)")
+        debugLog("Global settings - soundEnabled:\(soundEnabled) voiceEnabled:\(voiceEnabled)")
 
         // Record when alert was triggered for this session
         let triggerTime = Date()
@@ -1603,12 +1894,12 @@ class SessionManager {
                 trigger: nil
             )
 
-            NSLog("Sending notification for session: \(session.projectName), alertTriggeredAt: \(triggerTime)")
+            debugLog("Sending notification for session: \(session.projectName)")
             UNUserNotificationCenter.current().add(request) { error in
                 if let error = error {
-                    NSLog("Failed to deliver notification: \(error)")
+                    debugLog("Failed to deliver notification: \(error)")
                 } else {
-                    NSLog("Notification scheduled successfully for: \(session.projectName)")
+                    debugLog("Notification scheduled successfully for: \(session.projectName)")
                 }
             }
 
@@ -1618,18 +1909,24 @@ class SessionManager {
             }
         }
 
-        // Play sound if enabled
-        NSLog("Sound check: shouldSound=\(shouldSound), soundEnabled=\(soundEnabled)")
-        if shouldSound {
-            NSLog("Playing alert sound...")
+        // Play sound if enabled (suppress if DND active)
+        if shouldSound && !dndActive {
+            debugLog("Calling playAlertSound()")
             playAlertSound()
+        } else if dndActive {
+            debugLog("Sound suppressed due to DND/Focus mode")
+        } else {
+            debugLog("Sound disabled, not playing")
         }
 
-        // Speak if enabled
-        NSLog("Voice check: shouldVoice=\(shouldVoice), voiceEnabled=\(voiceEnabled)")
-        if shouldVoice {
-            NSLog("Speaking summary for: \(session.projectName)")
+        // Speak if enabled (suppress if DND active)
+        if shouldVoice && !dndActive {
+            debugLog("Calling speakSummary for: \(session.projectName)")
             speakSummary(session)
+        } else if dndActive {
+            debugLog("Voice suppressed due to DND/Focus mode")
+        } else {
+            debugLog("Voice disabled, not speaking")
         }
     }
 
@@ -1737,26 +2034,92 @@ class SessionManager {
         NSLog("Cancelled reminders for session \(sessionId)")
     }
 
-    private var speechSynthesizer: NSSpeechSynthesizer?
+    private var englishSynthesizer: NSSpeechSynthesizer?
+    private var koreanSynthesizer: NSSpeechSynthesizer?
+
+    // Check if text contains Korean characters
+    private func containsKorean(_ text: String) -> Bool {
+        return text.unicodeScalars.contains { scalar in
+            // Korean Hangul ranges
+            (0xAC00...0xD7A3).contains(scalar.value) ||  // Syllables
+            (0x1100...0x11FF).contains(scalar.value) ||  // Jamo
+            (0x3130...0x318F).contains(scalar.value)     // Compat Jamo
+        }
+    }
+
+    // Find a Korean voice
+    private func findKoreanVoice() -> NSSpeechSynthesizer.VoiceName? {
+        let voices = NSSpeechSynthesizer.availableVoices
+        // Look for Korean voices (Yuna is the common Korean voice on macOS)
+        for voice in voices {
+            let voiceId = voice.rawValue.lowercased()
+            if voiceId.contains("korean") || voiceId.contains("yuna") ||
+               voiceId.contains("ko_kr") || voiceId.contains("ko-kr") {
+                return voice
+            }
+        }
+        return nil
+    }
 
     func speakSummary(_ session: ClaudeSession) {
-        let textToSpeak = applyPronunciationRules(session.projectName)
-        NSLog("Speaking: \(textToSpeak)")
+        // Use original project name (skip pronunciation rules that may have non-speakable text)
+        let textToSpeak = session.projectName
+        debugLog("speakSummary called - projectName: '\(session.projectName)'")
+
+        if textToSpeak.isEmpty {
+            debugLog("WARNING: textToSpeak is empty, skipping speech")
+            return
+        }
+
+        let useKorean = containsKorean(textToSpeak)
+        debugLog("Text language detection: useKorean=\(useKorean)")
 
         // Must run on main thread
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
-            // Stop any ongoing speech
-            self.speechSynthesizer?.stopSpeaking()
-
-            // Create synthesizer if needed
-            if self.speechSynthesizer == nil {
-                self.speechSynthesizer = NSSpeechSynthesizer()
+            guard let self = self else {
+                debugLog("ERROR: self is nil in speakSummary async block")
+                return
             }
 
-            self.speechSynthesizer?.startSpeaking(textToSpeak)
-            NSLog("Speech started via NSSpeechSynthesizer")
+            debugLog("speakSummary async block executing on main thread")
+
+            // Stop any ongoing speech
+            self.englishSynthesizer?.stopSpeaking()
+            self.koreanSynthesizer?.stopSpeaking()
+
+            let synth: NSSpeechSynthesizer
+
+            if useKorean {
+                // Use Korean voice
+                if self.koreanSynthesizer == nil {
+                    if let koreanVoice = self.findKoreanVoice() {
+                        debugLog("Creating Korean synthesizer with voice: \(koreanVoice.rawValue)")
+                        self.koreanSynthesizer = NSSpeechSynthesizer(voice: koreanVoice)
+                    } else {
+                        debugLog("No Korean voice found, using default")
+                        self.koreanSynthesizer = NSSpeechSynthesizer()
+                    }
+                }
+                guard let s = self.koreanSynthesizer else {
+                    debugLog("ERROR: Failed to create Korean speech synthesizer")
+                    return
+                }
+                synth = s
+            } else {
+                // Use English (default) voice
+                if self.englishSynthesizer == nil {
+                    debugLog("Creating English synthesizer (default voice)")
+                    self.englishSynthesizer = NSSpeechSynthesizer()
+                }
+                guard let s = self.englishSynthesizer else {
+                    debugLog("ERROR: Failed to create English speech synthesizer")
+                    return
+                }
+                synth = s
+            }
+
+            let success = synth.startSpeaking(textToSpeak)
+            debugLog("startSpeaking returned: \(success) for text: '\(textToSpeak)' (korean=\(useKorean))")
         }
     }
 
@@ -1788,34 +2151,46 @@ class SessionManager {
     private var alertSound: NSSound?
 
     func playAlertSound() {
-        NSLog("Playing alert sound...")
+        debugLog("playAlertSound called")
         DispatchQueue.main.async { [weak self] in
-            // Keep reference to sound
-            if self?.alertSound == nil {
-                self?.alertSound = NSSound(named: "Glass")
+            guard let self = self else {
+                debugLog("ERROR: self is nil in playAlertSound async block")
+                return
             }
-            if let sound = self?.alertSound {
+            debugLog("playAlertSound async block executing on main thread")
+            // Keep reference to sound
+            if self.alertSound == nil {
+                debugLog("Creating new NSSound for Glass")
+                self.alertSound = NSSound(named: "Glass")
+            }
+            if let sound = self.alertSound {
                 sound.stop()
-                sound.play()
-                NSLog("Sound played via NSSound")
+                let success = sound.play()
+                debugLog("NSSound.play() returned: \(success)")
             } else {
-                NSLog("Failed to load Glass sound")
+                debugLog("ERROR: Failed to load Glass sound")
             }
         }
     }
 
     func testVoice() {
-        NSLog("Testing voice...")
+        debugLog("Testing voice...")
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self else {
+                debugLog("ERROR: self is nil in testVoice")
+                return
+            }
 
-            if self.speechSynthesizer == nil {
-                self.speechSynthesizer = NSSpeechSynthesizer()
+            // Test with English voice
+            if self.englishSynthesizer == nil {
+                debugLog("Creating new NSSpeechSynthesizer for test (English)")
+                self.englishSynthesizer = NSSpeechSynthesizer()
             }
 
             let testText = "Hello, this is a test"
-            NSLog("Speaking test: \(testText)")
-            self.speechSynthesizer?.startSpeaking(testText)
+            debugLog("Speaking test: \(testText)")
+            let success = self.englishSynthesizer?.startSpeaking(testText) ?? false
+            debugLog("testVoice startSpeaking returned: \(success)")
         }
     }
 
