@@ -1224,22 +1224,51 @@ class SessionManager {
     // MARK: - Session Management
 
     func acknowledgeSession(id: String) {
+        debugFileLog("acknowledgeSession called for id: \(id)")
+        NSLog("acknowledgeSession called for id: \(id)")
         if let index = sessions.firstIndex(where: { $0.id == id }) {
+            debugFileLog("acknowledgeSession: found session at index \(index), setting status to acknowledged")
+            NSLog("acknowledgeSession: found session at index \(index), setting status to acknowledged")
             sessions[index].status = .acknowledged
             sessions[index].acknowledgedAt = Date()
             saveSessions()
             onSessionsChanged?()
             cancelNotifications(for: id)
+            debugFileLog("acknowledgeSession: completed, called cancelNotifications")
+            NSLog("acknowledgeSession: completed for id \(id)")
+        } else {
+            debugFileLog("acknowledgeSession: session not found for id: \(id)")
+            NSLog("acknowledgeSession: session not found for id: \(id)")
         }
     }
 
 
+    private func debugFileLog(_ message: String) {
+        let logPath = NSHomeDirectory() + "/beacon_notification_debug.log"
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "\(timestamp) - \(message)\n"
+        if let data = line.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logPath) {
+                if let handle = FileHandle(forWritingAtPath: logPath) {
+                    handle.seekToEndOfFile()
+                    handle.write(data)
+                    handle.closeFile()
+                }
+            } else {
+                FileManager.default.createFile(atPath: logPath, contents: data)
+            }
+        }
+    }
+
     func navigateToSession(id: String) {
+        debugFileLog("navigateToSession called for id: \(id)")
         NSLog("navigateToSession called for id: \(id)")
         guard let session = sessions.first(where: { $0.id == id }) else {
+            debugFileLog("navigateToSession: session not found")
             NSLog("navigateToSession: session not found for id: \(id)")
             return
         }
+        debugFileLog("navigateToSession: found session \(session.projectName), terminal: \(session.terminalInfo)")
         NSLog("navigateToSession: found session \(session.projectName), terminal: \(session.terminalInfo)")
 
         let appName = session.terminalInfo
@@ -1268,11 +1297,14 @@ class SessionManager {
 
         // Special handling for PyCharm - use stored window name if available
         if appName == "PyCharm" {
+            debugFileLog("PyCharm navigation - pycharmWindow: \(session.pycharmWindow ?? "nil"), projectName: \(session.projectName)")
             NSLog("PyCharm navigation - pycharmWindow: \(session.pycharmWindow ?? "nil"), projectName: \(session.projectName)")
             if let windowName = session.pycharmWindow, !windowName.isEmpty {
+                debugFileLog("Using stored window name: \(windowName)")
                 NSLog("Using stored window name: \(windowName)")
                 activatePyCharmWindowByName(windowName: windowName)
             } else {
+                debugFileLog("Using project name search")
                 NSLog("Using project name search")
                 activatePyCharmWindow(projectName: session.projectName, workingDirectory: session.workingDirectory)
             }
@@ -2036,6 +2068,7 @@ class SessionManager {
     }
 
     func cancelReminders(for sessionId: String) {
+        debugFileLog("cancelReminders called for: \(sessionId)")
         // Cancel infinite reminder
         let infiniteId = "\(sessionId)-reminder-infinite"
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [infiniteId])
@@ -2050,7 +2083,18 @@ class SessionManager {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
 
+        debugFileLog("cancelReminders: removed pending and delivered for \(sessionId)")
         NSLog("Cancelled reminders for session \(sessionId)")
+    }
+
+    func cancelAllReminders() {
+        // Cancel all pending reminder notifications
+        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+            let reminderIds = requests.filter { $0.identifier.contains("-reminder-") }.map { $0.identifier }
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: reminderIds)
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: reminderIds)
+            NSLog("Cancelled all \(reminderIds.count) pending reminders")
+        }
     }
 
     private var englishSynthesizer: NSSpeechSynthesizer?

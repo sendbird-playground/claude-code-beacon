@@ -1460,36 +1460,56 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Debug: write to file to verify handler is called
         let logPath = NSHomeDirectory() + "/beacon_notification_debug.log"
         let timestamp = ISO8601DateFormatter().string(from: Date())
-        let logLine = "\(timestamp) - didReceive called, isReminder: \(isReminder), action: \(response.actionIdentifier)\n"
-        if let data = logLine.data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: logPath) {
-                if let handle = FileHandle(forWritingAtPath: logPath) {
-                    handle.seekToEndOfFile()
-                    handle.write(data)
-                    handle.closeFile()
+
+        func appendLog(_ message: String) {
+            let line = "\(timestamp) - \(message)\n"
+            if let data = line.data(using: .utf8) {
+                if FileManager.default.fileExists(atPath: logPath) {
+                    if let handle = FileHandle(forWritingAtPath: logPath) {
+                        handle.seekToEndOfFile()
+                        handle.write(data)
+                        handle.closeFile()
+                    }
+                } else {
+                    FileManager.default.createFile(atPath: logPath, contents: data)
                 }
-            } else {
-                FileManager.default.createFile(atPath: logPath, contents: data)
             }
         }
+
+        appendLog("didReceive called, isReminder: \(isReminder), action: \(response.actionIdentifier)")
 
         NSLog("Notification response received - isReminder: \(isReminder), userInfo: \(userInfo)")
 
         if let sessionId = userInfo["sessionId"] as? String {
-            NSLog("Notification action for session: \(sessionId), action: \(response.actionIdentifier)")
+            appendLog("sessionId found: \(sessionId)")
+
+            // ALWAYS cancel reminders first, even if session doesn't exist
+            appendLog("Cancelling reminders for sessionId: \(sessionId)")
+            sessionManager.cancelReminders(for: sessionId)
+
+            // Check if session exists
+            let sessionExists = sessionManager.sessions.contains { $0.id == sessionId }
+            appendLog("session exists in list: \(sessionExists)")
 
             // Handle click, Show action, or dismiss - all acknowledge the session
             if response.actionIdentifier == UNNotificationDefaultActionIdentifier ||
                response.actionIdentifier == SessionManager.showActionId {
                 // User clicked or tapped Show - navigate to session
-                NSLog("Navigating to session: \(sessionId)")
-                sessionManager.navigateToSession(id: sessionId)
-                sessionManager.acknowledgeSession(id: sessionId)
+                appendLog("Calling navigateToSession and acknowledgeSession")
+                if sessionExists {
+                    sessionManager.navigateToSession(id: sessionId)
+                    sessionManager.acknowledgeSession(id: sessionId)
+                }
+                appendLog("Functions called successfully")
             } else if response.actionIdentifier == UNNotificationDismissActionIdentifier {
                 // User dismissed the notification - just acknowledge (cancel reminders)
-                sessionManager.acknowledgeSession(id: sessionId)
+                appendLog("Dismiss action - calling acknowledgeSession only")
+                if sessionExists {
+                    sessionManager.acknowledgeSession(id: sessionId)
+                }
             }
         } else {
+            appendLog("No sessionId found in userInfo: \(userInfo)")
             NSLog("No sessionId found in notification userInfo")
         }
         completionHandler()
