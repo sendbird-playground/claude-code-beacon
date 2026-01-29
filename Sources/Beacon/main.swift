@@ -1478,10 +1478,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             let sessionExists = sessionManager.sessions.contains { $0.id == sessionId }
             appendLog("session exists in list: \(sessionExists)")
 
-            // Handle click, Show action, or dismiss - all acknowledge the session
-            if response.actionIdentifier == UNNotificationDefaultActionIdentifier ||
-               response.actionIdentifier == SessionManager.showActionId {
-                // User clicked or tapped Show - navigate to session
+            // Handle click or dismiss
+            if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+                // User clicked notification - navigate to session
                 appendLog("Calling navigateToSession and acknowledgeSession")
                 if sessionExists {
                     sessionManager.navigateToSession(id: sessionId)

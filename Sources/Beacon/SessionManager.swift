@@ -1864,18 +1864,12 @@ class SessionManager {
     // MARK: - Notifications
 
     static let notificationCategoryId = "SESSION_COMPLETED"
-    static let showActionId = "SHOW_SESSION"
 
     func registerNotificationCategories() {
-        let showAction = UNNotificationAction(
-            identifier: SessionManager.showActionId,
-            title: "Show",
-            options: [.foreground]
-        )
-
+        // No custom actions - clicking notification navigates to app
         let category = UNNotificationCategory(
             identifier: SessionManager.notificationCategoryId,
-            actions: [showAction],
+            actions: [],
             intentIdentifiers: [],
             options: [.customDismissAction]  // Enable dismiss action callback
         )
