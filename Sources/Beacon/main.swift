@@ -844,8 +844,14 @@ struct SettingsView: View {
         _reminderCount = State(initialValue: sessionManager.reminderCount)
         _groups = State(initialValue: sessionManager.groups)
         _pronunciationRules = State(initialValue: sessionManager.pronunciationRules)
-        _selectedEnglishVoice = State(initialValue: sessionManager.selectedEnglishVoice)
-        _selectedKoreanVoice = State(initialValue: sessionManager.selectedKoreanVoice)
+
+        // Use saved voice or default to first voice in list (Samantha/Yuna)
+        let englishVoices = sessionManager.getEnglishVoices()
+        let koreanVoices = sessionManager.getKoreanVoices()
+        let defaultEnglish = sessionManager.selectedEnglishVoice.isEmpty ? (englishVoices.first?.id ?? "") : sessionManager.selectedEnglishVoice
+        let defaultKorean = sessionManager.selectedKoreanVoice.isEmpty ? (koreanVoices.first?.id ?? "") : sessionManager.selectedKoreanVoice
+        _selectedEnglishVoice = State(initialValue: defaultEnglish)
+        _selectedKoreanVoice = State(initialValue: defaultKorean)
     }
 
     @State private var selectedTab = 0
