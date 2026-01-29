@@ -2418,7 +2418,10 @@ class SessionManager {
     }
 
     func testAlerts() {
-        debugLog("Testing alerts with current settings - notification:\(notificationEnabled) sound:\(soundEnabled) voice:\(voiceEnabled)")
+        debugLog("Testing alerts with current settings - notification:\(notificationEnabled) sound:\(soundEnabled) voice:\(voiceEnabled) reminder:\(reminderEnabled)")
+
+        // Generate a unique test session ID for this test
+        let testSessionId = "test-\(UUID().uuidString)"
 
         // Test notification if enabled
         if notificationEnabled {
@@ -2426,14 +2429,14 @@ class SessionManager {
             content.title = "Beacon Test"
             content.body = "Test alert from Beacon"
             content.sound = nil
-            content.userInfo = ["isTest": true]
+            content.userInfo = ["isTest": true, "sessionId": testSessionId]
             content.categoryIdentifier = SessionManager.notificationCategoryId
 
             // Use a time trigger instead of immediate to ensure proper icon loading
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
 
             let request = UNNotificationRequest(
-                identifier: "test-notification-\(Date().timeIntervalSince1970)",
+                identifier: testSessionId,
                 content: content,
                 trigger: trigger
             )
@@ -2444,6 +2447,11 @@ class SessionManager {
                 } else {
                     debugLog("Test notification sent successfully")
                 }
+            }
+
+            // Schedule test reminders if enabled
+            if reminderEnabled {
+                scheduleTestReminders(testSessionId: testSessionId)
             }
         }
 
@@ -2458,6 +2466,62 @@ class SessionManager {
         }
     }
 
+    /// Schedule reminders for test notification
+    private func scheduleTestReminders(testSessionId: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Reminder: Test Alert"
+        content.body = "Test reminder from Beacon"
+        content.sound = .default
+        content.userInfo = ["sessionId": testSessionId, "isReminder": true, "isTest": true]
+        content.categoryIdentifier = SessionManager.notificationCategoryId
+
+        debugLog("Scheduling test reminders for \(testSessionId)")
+
+        if reminderCount == 0 {
+            // Infinite: use repeating trigger (minimum 60 seconds for repeating)
+            let interval = max(60, reminderInterval)
+            let trigger = UNTimeIntervalNotificationTrigger(
+                timeInterval: TimeInterval(interval),
+                repeats: true
+            )
+
+            let request = UNNotificationRequest(
+                identifier: "\(testSessionId)-reminder-infinite",
+                content: content,
+                trigger: trigger
+            )
+
+            UNUserNotificationCenter.current().add(request) { error in
+                if let error = error {
+                    debugLog("Failed to schedule test infinite reminder: \(error)")
+                } else {
+                    debugLog("Test infinite reminder scheduled every \(interval)s")
+                }
+            }
+        } else {
+            // Finite: schedule specific number of reminders
+            for i in 1...reminderCount {
+                let trigger = UNTimeIntervalNotificationTrigger(
+                    timeInterval: TimeInterval(reminderInterval * i),
+                    repeats: false
+                )
+
+                let request = UNNotificationRequest(
+                    identifier: "\(testSessionId)-reminder-\(i)",
+                    content: content,
+                    trigger: trigger
+                )
+
+                UNUserNotificationCenter.current().add(request) { error in
+                    if let error = error {
+                        debugLog("Failed to schedule test reminder \(i): \(error)")
+                    } else {
+                        debugLog("Test reminder \(i) scheduled in \(self.reminderInterval * i)s")
+                    }
+                }
+            }
+        }
+    }
 
     // MARK: - Persistence
 
