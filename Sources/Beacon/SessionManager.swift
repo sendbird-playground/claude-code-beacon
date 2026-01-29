@@ -2111,14 +2111,25 @@ class SessionManager {
         return result
     }
 
-    // Extract readable voice name from identifier
+    // Extract readable voice name from identifier with quality indicator
     private func extractVoiceName(_ voiceId: String) -> String {
         // Voice IDs look like "com.apple.voice.compact.en-US.Samantha"
+        // or "com.apple.voice.premium.en-US.Samantha"
         let components = voiceId.split(separator: ".")
-        if let lastName = components.last {
-            return String(lastName)
+        guard let lastName = components.last else { return voiceId }
+
+        let name = String(lastName)
+        let lowerId = voiceId.lowercased()
+
+        // Add quality indicator to distinguish variants
+        if lowerId.contains(".premium.") {
+            return "\(name) (Premium)"
+        } else if lowerId.contains(".enhanced.") {
+            return "\(name) (Enhanced)"
+        } else if lowerId.contains(".compact.") {
+            return "\(name) (Compact)"
         }
-        return voiceId
+        return name
     }
 
     // Find the selected or default Korean voice (defaults to Yuna)
