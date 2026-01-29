@@ -1952,8 +1952,13 @@ class SessionManager {
         // Send macOS notification if enabled
         if shouldNotify {
             let content = UNMutableNotificationContent()
+            // Format completion time
+            let timeFormatter = DateFormatter()
+            timeFormatter.dateFormat = "h:mm a"
+            let timeString = timeFormatter.string(from: triggerTime)
+
             content.title = "Claude Task Completed"
-            content.body = "\(session.terminalInfo) · \(session.projectName)"
+            content.body = "\(session.terminalInfo) · \(session.projectName) · \(timeString)"
             content.sound = nil  // We handle sound separately
             content.userInfo = ["sessionId": session.id]
             content.categoryIdentifier = SessionManager.notificationCategoryId
@@ -2004,9 +2009,14 @@ class SessionManager {
     }
 
     func scheduleReminders(for session: ClaudeSession, triggeredAt: Date) {
+        // Format completion time
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "h:mm a"
+        let timeString = timeFormatter.string(from: triggeredAt)
+
         let content = UNMutableNotificationContent()
         content.title = "Reminder: Task Completed"
-        content.body = "\(session.terminalInfo) · \(session.projectName)"
+        content.body = "\(session.terminalInfo) · \(session.projectName) · \(timeString)"
         content.sound = .default
         content.userInfo = ["sessionId": session.id, "isReminder": true, "triggeredAt": triggeredAt.timeIntervalSince1970]
         content.categoryIdentifier = SessionManager.notificationCategoryId
