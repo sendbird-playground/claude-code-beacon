@@ -1028,6 +1028,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .padding(.top, 8)
     }
 
     // MARK: - Groups Tab
@@ -1054,7 +1055,8 @@ struct SettingsView: View {
                         .padding(.horizontal)
                     }
                 }
-                .padding(.vertical)
+                .padding(.top, 16)
+                .padding(.bottom, 8)
             }
 
             Divider()
@@ -1073,37 +1075,12 @@ struct SettingsView: View {
 
     private var pronunciationTab: some View {
         VStack(spacing: 0) {
-            // Voice Selection Section
-            Form {
-                Section("Voice Selection") {
-                    Picker("English Voice", selection: $selectedEnglishVoice) {
-                        ForEach(sessionManager.getEnglishVoices(), id: \.id) { voice in
-                            Text(voice.name).tag(voice.id)
-                        }
-                    }
-                    .onChange(of: selectedEnglishVoice) { newValue in
-                        sessionManager.selectedEnglishVoice = newValue
-                    }
-
-                    Picker("Korean Voice", selection: $selectedKoreanVoice) {
-                        ForEach(sessionManager.getKoreanVoices(), id: \.id) { voice in
-                            Text(voice.name).tag(voice.id)
-                        }
-                    }
-                    .onChange(of: selectedKoreanVoice) { newValue in
-                        sessionManager.selectedKoreanVoice = newValue
-                    }
-                }
-            }
-            .formStyle(.grouped)
-            .frame(height: 130)
-
-            // Pronunciation Rules Section
+            // Pronunciation Rules Section (top, scrollable)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Pronunciation Rules")
                     .font(.headline)
                     .padding(.horizontal)
-                    .padding(.top, 8)
+                    .padding(.top, 16)
 
                 ScrollView {
                     LazyVStack(spacing: 8) {
@@ -1136,17 +1113,43 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 4)
                 }
+
+                HStack {
+                    Spacer()
+                    Button("Add Rule...") {
+                        showingAddRule = true
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                }
             }
 
             Divider()
 
-            HStack {
-                Spacer()
-                Button("Add Rule...") {
-                    showingAddRule = true
+            // Voice Selection Section (bottom)
+            Form {
+                Section("Voice Selection") {
+                    Picker("English Voice", selection: $selectedEnglishVoice) {
+                        ForEach(sessionManager.getEnglishVoices(), id: \.id) { voice in
+                            Text(voice.name).tag(voice.id)
+                        }
+                    }
+                    .onChange(of: selectedEnglishVoice) { newValue in
+                        sessionManager.selectedEnglishVoice = newValue
+                    }
+
+                    Picker("Korean Voice", selection: $selectedKoreanVoice) {
+                        ForEach(sessionManager.getKoreanVoices(), id: \.id) { voice in
+                            Text(voice.name).tag(voice.id)
+                        }
+                    }
+                    .onChange(of: selectedKoreanVoice) { newValue in
+                        sessionManager.selectedKoreanVoice = newValue
+                    }
                 }
-                .padding()
             }
+            .formStyle(.grouped)
+            .frame(height: 130)
         }
     }
 
