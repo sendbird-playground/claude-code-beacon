@@ -2173,6 +2173,28 @@ class SessionManager {
         }
     }
 
+    func testNotification() {
+        debugLog("Testing notification...")
+        let content = UNMutableNotificationContent()
+        content.title = "Beacon Test Notification"
+        content.body = "This is a test notification from Beacon"
+        content.sound = nil
+
+        let request = UNNotificationRequest(
+            identifier: "test-notification-\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: nil
+        )
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                debugLog("Test notification failed: \(error)")
+            } else {
+                debugLog("Test notification sent successfully")
+            }
+        }
+    }
+
 
     // MARK: - Persistence
 

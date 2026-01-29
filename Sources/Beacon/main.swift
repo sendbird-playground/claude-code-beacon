@@ -856,6 +856,9 @@ struct SettingsView: View {
                     }
 
                 HStack {
+                    Button("Test Notification") {
+                        sessionManager.testNotification()
+                    }
                     Button("Test Sound") {
                         sessionManager.playAlertSound()
                     }
