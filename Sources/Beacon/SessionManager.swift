@@ -39,6 +39,7 @@ struct SessionGroup: Identifiable, Codable {
     var name: String
     var colorHex: String  // Hex color string (e.g., "#FF5733")
     var order: Int
+    var isExpanded: Bool  // Whether group is expanded in UI
 
     // Group-level settings overrides (nil = use global setting)
     var notificationOverride: Bool?
@@ -51,6 +52,7 @@ struct SessionGroup: Identifiable, Codable {
         name: String,
         colorHex: String = "#808080",
         order: Int = 0,
+        isExpanded: Bool = true,
         notificationOverride: Bool? = nil,
         soundOverride: Bool? = nil,
         voiceOverride: Bool? = nil,
@@ -60,6 +62,7 @@ struct SessionGroup: Identifiable, Codable {
         self.name = name
         self.colorHex = colorHex
         self.order = order
+        self.isExpanded = isExpanded
         self.notificationOverride = notificationOverride
         self.soundOverride = soundOverride
         self.voiceOverride = voiceOverride
@@ -73,6 +76,7 @@ struct SessionGroup: Identifiable, Codable {
         name = try container.decode(String.self, forKey: .name)
         colorHex = try container.decodeIfPresent(String.self, forKey: .colorHex) ?? "#808080"
         order = try container.decodeIfPresent(Int.self, forKey: .order) ?? 0
+        isExpanded = try container.decodeIfPresent(Bool.self, forKey: .isExpanded) ?? true
         notificationOverride = try container.decodeIfPresent(Bool.self, forKey: .notificationOverride)
         soundOverride = try container.decodeIfPresent(Bool.self, forKey: .soundOverride)
         voiceOverride = try container.decodeIfPresent(Bool.self, forKey: .voiceOverride)
@@ -1699,6 +1703,14 @@ class SessionManager {
     func setGroupReminderOverride(id: String, enabled: Bool?) {
         if let index = groups.firstIndex(where: { $0.id == id }) {
             groups[index].reminderOverride = enabled
+            saveGroups()
+            onSessionsChanged?()
+        }
+    }
+
+    func toggleGroupExpanded(id: String) {
+        if let index = groups.firstIndex(where: { $0.id == id }) {
+            groups[index].isExpanded.toggle()
             saveGroups()
             onSessionsChanged?()
         }

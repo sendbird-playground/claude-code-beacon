@@ -126,6 +126,12 @@ struct GroupSectionView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Group header - always visible for drag targets
             HStack(spacing: 6) {
+                // Expand/collapse chevron
+                Image(systemName: group.isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(width: 12)
+
                 Circle()
                     .fill(Color(hex: group.colorHex) ?? .gray)
                     .frame(width: 10, height: 10)
@@ -185,23 +191,31 @@ struct GroupSectionView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(isTargeted ? Color.accentColor.opacity(0.2) : (isHovered ? Color.primary.opacity(0.05) : Color.clear))
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if !isEditingName {
+                    viewModel.toggleGroupExpanded(groupId: group.id)
+                }
+            }
             .onHover { isHovered = $0 }
 
-            // Sessions (indented as children)
-            ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
-                SessionRowView(session: session, viewModel: viewModel, indented: true)
-                    .onDrag {
-                        draggingSession = session
-                        return NSItemProvider(object: session.id as NSString)
-                    }
-                    .onDrop(of: [.text], delegate: SessionReorderDropDelegate(
-                        targetSession: session,
-                        targetIndex: index,
-                        allSessions: sessions,
-                        group: group,
-                        viewModel: viewModel,
-                        draggingSession: $draggingSession
-                    ))
+            // Sessions (indented as children) - only show when expanded
+            if group.isExpanded {
+                ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
+                    SessionRowView(session: session, viewModel: viewModel, indented: true)
+                        .onDrag {
+                            draggingSession = session
+                            return NSItemProvider(object: session.id as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: SessionReorderDropDelegate(
+                            targetSession: session,
+                            targetIndex: index,
+                            allSessions: sessions,
+                            group: group,
+                            viewModel: viewModel,
+                            draggingSession: $draggingSession
+                        ))
+                }
             }
         }
         .onDrop(of: [.text], delegate: GroupDropDelegate(
@@ -773,6 +787,10 @@ class SessionsViewModel: ObservableObject {
 
     func deleteGroup(groupId: String) {
         sessionManager.deleteGroup(id: groupId)
+    }
+
+    func toggleGroupExpanded(groupId: String) {
+        sessionManager.toggleGroupExpanded(id: groupId)
     }
 
     // MARK: - Session Settings
