@@ -864,29 +864,34 @@ struct SettingsView: View {
     @State private var selectedTab = 0
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            // General Tab - Alerts, Reminders, About
-            generalTab
-                .tabItem {
-                    Label("General", systemImage: "gear")
-                }
-                .tag(0)
+        VStack(spacing: 0) {
+            Spacer()
+                .frame(height: 12)
 
-            // Groups Tab
-            groupsTab
-                .tabItem {
-                    Label("Groups", systemImage: "folder")
-                }
-                .tag(1)
+            TabView(selection: $selectedTab) {
+                // General Tab - Alerts, Reminders, About
+                generalTab
+                    .tabItem {
+                        Label("General", systemImage: "gear")
+                    }
+                    .tag(0)
 
-            // Pronunciation Tab
-            pronunciationTab
-                .tabItem {
-                    Label("Voice", systemImage: "waveform")
-                }
-                .tag(2)
+                // Groups Tab
+                groupsTab
+                    .tabItem {
+                        Label("Groups", systemImage: "folder")
+                    }
+                    .tag(1)
+
+                // Pronunciation Tab
+                pronunciationTab
+                    .tabItem {
+                        Label("Voice", systemImage: "waveform")
+                    }
+                    .tag(2)
+            }
         }
-        .frame(minWidth: 400, minHeight: 350)
+        .frame(minWidth: 400, minHeight: 370)
         .background(
             Color.clear
                 .contentShape(Rectangle())
