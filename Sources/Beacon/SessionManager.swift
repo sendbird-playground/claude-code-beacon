@@ -761,12 +761,13 @@ class SessionManager {
                 continue
             }
 
-            // Check if we have a running session for this PID
-            let hasRunningSession = sessions.contains(where: { $0.pid == process.pid && $0.status == .running })
+            // Check if we already have a session for this PID (any status)
+            // Don't create duplicate sessions for the same PID - this prevents
+            // re-notifying when an acknowledged session's process is still running
+            let hasSessionForPid = sessions.contains(where: { $0.pid == process.pid })
 
-            if !hasRunningSession {
-                // Either new PID or existing PID whose session was acknowledged/completed
-                // but process is still running - need to create a new running session
+            if !hasSessionForPid {
+                // Truly new PID - create a new session
                 knownPids.insert(process.pid)
 
                 // Try to find git root for better project name
@@ -843,6 +844,17 @@ class SessionManager {
         if isFirstScan {
             isFirstScan = false
             NSLog("First scan complete - future session completions will trigger notifications")
+        }
+
+        // Clean up PIDs from acknowledged/completed sessions that are no longer running
+        // This allows new sessions to be created when a truly new process starts
+        for i in sessions.indices.reversed() {
+            if let pid = sessions[i].pid,
+               (sessions[i].status == .acknowledged || sessions[i].status == .completed),
+               !runningPids.contains(pid) {
+                // Clear the PID so this session won't block new sessions
+                sessions[i].pid = nil
+            }
         }
 
         // Clean up old PIDs and monitors
