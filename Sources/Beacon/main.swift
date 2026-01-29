@@ -1478,9 +1478,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         if let sessionId = userInfo["sessionId"] as? String {
             appendLog("sessionId found: \(sessionId)")
 
-            // ALWAYS cancel reminders first, even if session doesn't exist
-            appendLog("Cancelling reminders for sessionId: \(sessionId)")
-            sessionManager.cancelReminders(for: sessionId)
+            // Cancel ALL reminders when user interacts with any notification
+            appendLog("Cancelling ALL reminders")
+            sessionManager.cancelAllReminders()
 
             // Check if session exists
             let sessionExists = sessionManager.sessions.contains { $0.id == sessionId }

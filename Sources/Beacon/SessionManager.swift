@@ -2221,13 +2221,27 @@ class SessionManager {
     }
 
     func cancelAllReminders() {
+        debugFileLog("cancelAllReminders called")
+
         // Cancel all pending reminder notifications
         UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
             let reminderIds = requests.filter { $0.identifier.contains("-reminder-") }.map { $0.identifier }
-            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: reminderIds)
-            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: reminderIds)
-            NSLog("Cancelled all \(reminderIds.count) pending reminders")
+            if !reminderIds.isEmpty {
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: reminderIds)
+                NSLog("Cancelled \(reminderIds.count) pending reminders: \(reminderIds)")
+            }
         }
+
+        // Also remove all delivered reminder notifications
+        UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
+            let reminderIds = notifications.filter { $0.request.identifier.contains("-reminder-") }.map { $0.request.identifier }
+            if !reminderIds.isEmpty {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: reminderIds)
+                NSLog("Removed \(reminderIds.count) delivered reminders")
+            }
+        }
+
+        debugFileLog("cancelAllReminders completed")
     }
 
     private var englishSynthesizer: NSSpeechSynthesizer?
