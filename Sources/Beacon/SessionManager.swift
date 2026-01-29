@@ -419,10 +419,13 @@ class SessionManager {
         content.body = "Version \(version) is available. Open Settings to update."
         content.sound = nil
 
+        // Use a small time trigger to ensure proper icon loading
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
+
         let request = UNNotificationRequest(
             identifier: "beacon-update",
             content: content,
-            trigger: nil
+            trigger: trigger
         )
 
         UNUserNotificationCenter.current().add(request) { error in
@@ -1878,10 +1881,13 @@ class SessionManager {
             content.userInfo = ["sessionId": session.id]
             content.categoryIdentifier = SessionManager.notificationCategoryId
 
+            // Use a small time trigger to ensure proper icon loading
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
+
             let request = UNNotificationRequest(
                 identifier: session.id,
                 content: content,
-                trigger: nil
+                trigger: trigger
             )
 
             debugLog("Sending notification for session: \(session.projectName)")
