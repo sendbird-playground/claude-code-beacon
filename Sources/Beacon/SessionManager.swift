@@ -283,6 +283,22 @@ class SessionManager {
         didSet { saveSettings() }
     }
 
+    // Voice selection (voice identifier strings)
+    var selectedEnglishVoice: String = "" {
+        didSet {
+            saveSettings()
+            // Reset synthesizer to use new voice
+            englishSynthesizer = nil
+        }
+    }
+    var selectedKoreanVoice: String = "" {
+        didSet {
+            saveSettings()
+            // Reset synthesizer to use new voice
+            koreanSynthesizer = nil
+        }
+    }
+
     // Track reminder counts per session
     private var reminderCounts: [String: Int] = [:]
 
@@ -2050,10 +2066,61 @@ class SessionManager {
         }
     }
 
-    // Find a Korean voice
-    private func findKoreanVoice() -> NSSpeechSynthesizer.VoiceName? {
+    // Get available English voices
+    func getEnglishVoices() -> [(id: String, name: String)] {
         let voices = NSSpeechSynthesizer.availableVoices
-        // Look for Korean voices (Yuna is the common Korean voice on macOS)
+        var result: [(id: String, name: String)] = []
+        for voice in voices {
+            let voiceId = voice.rawValue.lowercased()
+            // Include voices that are English or have common English identifiers
+            if voiceId.contains("en_") || voiceId.contains("en-") ||
+               voiceId.contains("english") || voiceId.contains("samantha") ||
+               voiceId.contains("alex") || voiceId.contains("victoria") ||
+               voiceId.contains("daniel") || voiceId.contains("karen") {
+                let name = extractVoiceName(voice.rawValue)
+                result.append((id: voice.rawValue, name: name))
+            }
+        }
+        // Add default option
+        result.insert((id: "", name: "System Default"), at: 0)
+        return result
+    }
+
+    // Get available Korean voices
+    func getKoreanVoices() -> [(id: String, name: String)] {
+        let voices = NSSpeechSynthesizer.availableVoices
+        var result: [(id: String, name: String)] = []
+        for voice in voices {
+            let voiceId = voice.rawValue.lowercased()
+            if voiceId.contains("korean") || voiceId.contains("yuna") ||
+               voiceId.contains("ko_kr") || voiceId.contains("ko-kr") {
+                let name = extractVoiceName(voice.rawValue)
+                result.append((id: voice.rawValue, name: name))
+            }
+        }
+        // Add default option
+        result.insert((id: "", name: "System Default"), at: 0)
+        return result
+    }
+
+    // Extract readable voice name from identifier
+    private func extractVoiceName(_ voiceId: String) -> String {
+        // Voice IDs look like "com.apple.voice.compact.en-US.Samantha"
+        let components = voiceId.split(separator: ".")
+        if let lastName = components.last {
+            return String(lastName)
+        }
+        return voiceId
+    }
+
+    // Find the selected or default Korean voice
+    private func findKoreanVoice() -> NSSpeechSynthesizer.VoiceName? {
+        // Use selected voice if set
+        if !selectedKoreanVoice.isEmpty {
+            return NSSpeechSynthesizer.VoiceName(rawValue: selectedKoreanVoice)
+        }
+        // Otherwise find any Korean voice
+        let voices = NSSpeechSynthesizer.availableVoices
         for voice in voices {
             let voiceId = voice.rawValue.lowercased()
             if voiceId.contains("korean") || voiceId.contains("yuna") ||
@@ -2062,6 +2129,14 @@ class SessionManager {
             }
         }
         return nil
+    }
+
+    // Find the selected or default English voice
+    private func findEnglishVoice() -> NSSpeechSynthesizer.VoiceName? {
+        if !selectedEnglishVoice.isEmpty {
+            return NSSpeechSynthesizer.VoiceName(rawValue: selectedEnglishVoice)
+        }
+        return nil  // nil means use system default
     }
 
     func speakSummary(_ session: ClaudeSession) {
@@ -2109,10 +2184,15 @@ class SessionManager {
                 }
                 synth = s
             } else {
-                // Use English (default) voice
+                // Use English voice
                 if self.englishSynthesizer == nil {
-                    debugLog("Creating English synthesizer (default voice)")
-                    self.englishSynthesizer = NSSpeechSynthesizer()
+                    if let englishVoice = self.findEnglishVoice() {
+                        debugLog("Creating English synthesizer with voice: \(englishVoice.rawValue)")
+                        self.englishSynthesizer = NSSpeechSynthesizer(voice: englishVoice)
+                    } else {
+                        debugLog("Using default English voice")
+                        self.englishSynthesizer = NSSpeechSynthesizer()
+                    }
                 }
                 guard let s = self.englishSynthesizer else {
                     debugLog("ERROR: Failed to create English speech synthesizer")
@@ -2312,6 +2392,8 @@ class SessionManager {
         var reminderInterval: Int
         var reminderCount: Int
         var pronunciationRules: [String: String]
+        var selectedEnglishVoice: String
+        var selectedKoreanVoice: String
 
         // Custom decoder to handle missing keys with defaults
         init(from decoder: Decoder) throws {
@@ -2324,9 +2406,11 @@ class SessionManager {
             reminderInterval = try container.decodeIfPresent(Int.self, forKey: .reminderInterval) ?? 60
             reminderCount = try container.decodeIfPresent(Int.self, forKey: .reminderCount) ?? 3
             pronunciationRules = try container.decodeIfPresent([String: String].self, forKey: .pronunciationRules) ?? [:]
+            selectedEnglishVoice = try container.decodeIfPresent(String.self, forKey: .selectedEnglishVoice) ?? ""
+            selectedKoreanVoice = try container.decodeIfPresent(String.self, forKey: .selectedKoreanVoice) ?? ""
         }
 
-        init(notificationEnabled: Bool, soundEnabled: Bool, voiceEnabled: Bool, maxRecentSessions: Int, reminderEnabled: Bool, reminderInterval: Int, reminderCount: Int, pronunciationRules: [String: String]) {
+        init(notificationEnabled: Bool, soundEnabled: Bool, voiceEnabled: Bool, maxRecentSessions: Int, reminderEnabled: Bool, reminderInterval: Int, reminderCount: Int, pronunciationRules: [String: String], selectedEnglishVoice: String, selectedKoreanVoice: String) {
             self.notificationEnabled = notificationEnabled
             self.soundEnabled = soundEnabled
             self.voiceEnabled = voiceEnabled
@@ -2335,6 +2419,8 @@ class SessionManager {
             self.reminderInterval = reminderInterval
             self.reminderCount = reminderCount
             self.pronunciationRules = pronunciationRules
+            self.selectedEnglishVoice = selectedEnglishVoice
+            self.selectedKoreanVoice = selectedKoreanVoice
         }
     }
 
@@ -2348,7 +2434,9 @@ class SessionManager {
                 reminderEnabled: reminderEnabled,
                 reminderInterval: reminderInterval,
                 reminderCount: reminderCount,
-                pronunciationRules: pronunciationRules
+                pronunciationRules: pronunciationRules,
+                selectedEnglishVoice: selectedEnglishVoice,
+                selectedKoreanVoice: selectedKoreanVoice
             )
             let data = try JSONEncoder().encode(settings)
             try data.write(to: settingsURL, options: .atomic)
@@ -2371,6 +2459,8 @@ class SessionManager {
             reminderInterval = settings.reminderInterval
             reminderCount = settings.reminderCount
             pronunciationRules = settings.pronunciationRules
+            selectedEnglishVoice = settings.selectedEnglishVoice
+            selectedKoreanVoice = settings.selectedKoreanVoice
         } catch {
             print("Failed to load settings: \(error)")
         }

@@ -844,6 +844,8 @@ struct SettingsView: View {
     @State private var showingAddRule = false
     @State private var newRulePattern = ""
     @State private var newRulePronunciation = ""
+    @State private var selectedEnglishVoice: String
+    @State private var selectedKoreanVoice: String
 
     init(sessionManager: SessionManager) {
         self.sessionManager = sessionManager
@@ -855,6 +857,8 @@ struct SettingsView: View {
         _reminderCount = State(initialValue: sessionManager.reminderCount)
         _groups = State(initialValue: sessionManager.groups)
         _pronunciationRules = State(initialValue: sessionManager.pronunciationRules)
+        _selectedEnglishVoice = State(initialValue: sessionManager.selectedEnglishVoice)
+        _selectedKoreanVoice = State(initialValue: sessionManager.selectedKoreanVoice)
     }
 
     @State private var selectedTab = 0
@@ -1069,36 +1073,71 @@ struct SettingsView: View {
 
     private var pronunciationTab: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(Array(pronunciationRules.keys.sorted()), id: \.self) { pattern in
-                        PronunciationRuleRow(
-                            pattern: pattern,
-                            pronunciation: pronunciationRules[pattern] ?? "",
-                            onUpdatePattern: { newPattern in
-                                let oldPronunciation = pronunciationRules[pattern] ?? ""
-                                sessionManager.removePronunciationRule(pattern: pattern)
-                                sessionManager.addPronunciationRule(pattern: newPattern, pronunciation: oldPronunciation)
-                                pronunciationRules = sessionManager.pronunciationRules
-                            },
-                            onUpdatePronunciation: { newPronunciation in
-                                sessionManager.addPronunciationRule(pattern: pattern, pronunciation: newPronunciation)
-                                pronunciationRules = sessionManager.pronunciationRules
-                            },
-                            onDelete: {
-                                deleteRule(pattern)
-                            }
-                        )
-                        .padding(.horizontal)
+            // Voice Selection Section
+            Form {
+                Section("Voice Selection") {
+                    Picker("English Voice", selection: $selectedEnglishVoice) {
+                        ForEach(sessionManager.getEnglishVoices(), id: \.id) { voice in
+                            Text(voice.name).tag(voice.id)
+                        }
+                    }
+                    .onChange(of: selectedEnglishVoice) { newValue in
+                        sessionManager.selectedEnglishVoice = newValue
                     }
 
-                    if pronunciationRules.isEmpty {
-                        Text("No pronunciation rules")
-                            .foregroundColor(.secondary)
-                            .padding()
+                    Picker("Korean Voice", selection: $selectedKoreanVoice) {
+                        ForEach(sessionManager.getKoreanVoices(), id: \.id) { voice in
+                            Text(voice.name).tag(voice.id)
+                        }
+                    }
+                    .onChange(of: selectedKoreanVoice) { newValue in
+                        sessionManager.selectedKoreanVoice = newValue
                     }
                 }
-                .padding(.vertical)
+            }
+            .formStyle(.grouped)
+            .frame(height: 120)
+
+            Divider()
+
+            // Pronunciation Rules Section
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Pronunciation Rules")
+                    .font(.headline)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(Array(pronunciationRules.keys.sorted()), id: \.self) { pattern in
+                            PronunciationRuleRow(
+                                pattern: pattern,
+                                pronunciation: pronunciationRules[pattern] ?? "",
+                                onUpdatePattern: { newPattern in
+                                    let oldPronunciation = pronunciationRules[pattern] ?? ""
+                                    sessionManager.removePronunciationRule(pattern: pattern)
+                                    sessionManager.addPronunciationRule(pattern: newPattern, pronunciation: oldPronunciation)
+                                    pronunciationRules = sessionManager.pronunciationRules
+                                },
+                                onUpdatePronunciation: { newPronunciation in
+                                    sessionManager.addPronunciationRule(pattern: pattern, pronunciation: newPronunciation)
+                                    pronunciationRules = sessionManager.pronunciationRules
+                                },
+                                onDelete: {
+                                    deleteRule(pattern)
+                                }
+                            )
+                            .padding(.horizontal)
+                        }
+
+                        if pronunciationRules.isEmpty {
+                            Text("No pronunciation rules")
+                                .foregroundColor(.secondary)
+                                .padding()
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
             }
 
             Divider()
