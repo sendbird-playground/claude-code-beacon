@@ -24,6 +24,48 @@ private func debugLog(_ message: String) {
     }
 }
 
+// MARK: - Time Formatting (Slack-style)
+
+private func formatRelativeTime(from date: Date) -> String {
+    let now = Date()
+    let seconds = Int(now.timeIntervalSince(date))
+
+    if seconds < 60 {
+        return "Just now"
+    }
+
+    let minutes = seconds / 60
+    if minutes < 60 {
+        return "\(minutes)m"
+    }
+
+    let hours = minutes / 60
+    if hours < 24 {
+        return "\(hours)h"
+    }
+
+    // For older times, show day + time
+    let calendar = Calendar.current
+    let formatter = DateFormatter()
+    formatter.dateFormat = "h:mm a"
+    let timeStr = formatter.string(from: date)
+
+    if calendar.isDateInYesterday(date) {
+        return "Yesterday \(timeStr)"
+    }
+
+    // Within this week - show day name
+    let daysAgo = hours / 24
+    if daysAgo < 7 {
+        formatter.dateFormat = "EEE h:mm a"  // "Mon 3:45 PM"
+        return formatter.string(from: date)
+    }
+
+    // Older - show date
+    formatter.dateFormat = "MMM d, h:mm a"  // "Jan 15, 3:45 PM"
+    return formatter.string(from: date)
+}
+
 // MARK: - Models
 
 enum SessionStatus: String, Codable {
@@ -2004,18 +2046,24 @@ class SessionManager {
     }
 
     func scheduleReminders(for session: ClaudeSession, triggeredAt: Date) {
-        let content = UNMutableNotificationContent()
-        content.title = "Reminder: Task Completed"
-        content.body = "\(session.terminalInfo) · \(session.projectName)"
-        content.sound = .default
-        content.userInfo = ["sessionId": session.id, "isReminder": true, "triggeredAt": triggeredAt.timeIntervalSince1970]
-        content.categoryIdentifier = SessionManager.notificationCategoryId
-
         NSLog("Scheduling reminders for session \(session.id), triggered at: \(triggeredAt)")
+
+        // Format the original completion time for display
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "h:mm a"
+        let completionTime = timeFormatter.string(from: triggeredAt)
 
         if reminderCount == 0 {
             // Infinite: use repeating trigger (minimum 60 seconds for repeating)
             let interval = max(60, reminderInterval)
+
+            let content = UNMutableNotificationContent()
+            content.title = "Reminder: Task Completed"
+            content.body = "\(session.terminalInfo) · \(session.projectName) · \(completionTime)"
+            content.sound = .default
+            content.userInfo = ["sessionId": session.id, "isReminder": true, "triggeredAt": triggeredAt.timeIntervalSince1970]
+            content.categoryIdentifier = SessionManager.notificationCategoryId
+
             let trigger = UNTimeIntervalNotificationTrigger(
                 timeInterval: TimeInterval(interval),
                 repeats: true
@@ -2044,6 +2092,17 @@ class SessionManager {
                 // Only schedule if the reminder time is in the future
                 let timeUntilReminder = reminderTime.timeIntervalSince(now)
                 if timeUntilReminder > 0 {
+                    // Calculate how long ago the task will have completed when reminder fires
+                    let minutesAgo = (reminderInterval * i) / 60
+                    let relativeTime = minutesAgo < 60 ? "\(minutesAgo)m" : "\(minutesAgo / 60)h"
+
+                    let content = UNMutableNotificationContent()
+                    content.title = "Reminder: Task Completed"
+                    content.body = "\(session.terminalInfo) · \(session.projectName) · \(relativeTime)"
+                    content.sound = .default
+                    content.userInfo = ["sessionId": session.id, "isReminder": true, "triggeredAt": triggeredAt.timeIntervalSince1970]
+                    content.categoryIdentifier = SessionManager.notificationCategoryId
+
                     let trigger = UNTimeIntervalNotificationTrigger(
                         timeInterval: timeUntilReminder,
                         repeats: false
