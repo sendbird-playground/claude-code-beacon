@@ -2065,9 +2065,9 @@ class SessionManager {
     }
 
     func speakSummary(_ session: ClaudeSession) {
-        // Use original project name (skip pronunciation rules that may have non-speakable text)
-        let textToSpeak = session.projectName
-        debugLog("speakSummary called - projectName: '\(session.projectName)'")
+        // Apply pronunciation rules to project name
+        let textToSpeak = applyPronunciationRules(session.projectName)
+        debugLog("speakSummary called - projectName: '\(session.projectName)', after rules: '\(textToSpeak)'")
 
         if textToSpeak.isEmpty {
             debugLog("WARNING: textToSpeak is empty, skipping speech")
