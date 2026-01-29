@@ -31,17 +31,23 @@ private func formatRelativeTime(from date: Date) -> String {
     let seconds = Int(now.timeIntervalSince(date))
 
     if seconds < 60 {
-        return "Just now"
+        return "just now"
     }
 
     let minutes = seconds / 60
+    if minutes == 1 {
+        return "1 min ago"
+    }
     if minutes < 60 {
-        return "\(minutes)m"
+        return "\(minutes) min ago"
     }
 
     let hours = minutes / 60
+    if hours == 1 {
+        return "1 hour ago"
+    }
     if hours < 24 {
-        return "\(hours)h"
+        return "\(hours) hours ago"
     }
 
     // For older times, show day + time
@@ -51,7 +57,7 @@ private func formatRelativeTime(from date: Date) -> String {
     let timeStr = formatter.string(from: date)
 
     if calendar.isDateInYesterday(date) {
-        return "Yesterday \(timeStr)"
+        return "yesterday \(timeStr)"
     }
 
     // Within this week - show day name
@@ -1993,14 +1999,9 @@ class SessionManager {
 
         // Send macOS notification if enabled
         if shouldNotify {
-            // Format completion time
-            let timeFormatter = DateFormatter()
-            timeFormatter.dateFormat = "h:mm a"
-            let completionTime = timeFormatter.string(from: triggerTime)
-
             let content = UNMutableNotificationContent()
             content.title = "Claude Task Completed"
-            content.body = "\(session.terminalInfo) · \(session.projectName) · \(completionTime)"
+            content.body = "\(session.terminalInfo) · \(session.projectName)"
             content.sound = nil  // We handle sound separately
             content.userInfo = ["sessionId": session.id]
             content.categoryIdentifier = SessionManager.notificationCategoryId
@@ -2099,7 +2100,17 @@ class SessionManager {
                 if timeUntilReminder > 0 {
                     // Calculate how long ago the task will have completed when reminder fires
                     let minutesAgo = (reminderInterval * i) / 60
-                    let relativeTime = minutesAgo < 60 ? "\(minutesAgo)m" : "\(minutesAgo / 60)h"
+                    let hoursAgo = minutesAgo / 60
+                    let relativeTime: String
+                    if minutesAgo == 1 {
+                        relativeTime = "1 min ago"
+                    } else if minutesAgo < 60 {
+                        relativeTime = "\(minutesAgo) min ago"
+                    } else if hoursAgo == 1 {
+                        relativeTime = "1 hour ago"
+                    } else {
+                        relativeTime = "\(hoursAgo) hours ago"
+                    }
 
                     let content = UNMutableNotificationContent()
                     content.title = "Reminder: Task Completed"
