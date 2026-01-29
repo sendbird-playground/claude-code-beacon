@@ -2179,6 +2179,7 @@ class SessionManager {
         content.title = "Beacon Test Notification"
         content.body = "This is a test notification from Beacon"
         content.sound = nil
+        content.categoryIdentifier = SessionManager.notificationCategoryId
 
         let request = UNNotificationRequest(
             identifier: "test-notification-\(Date().timeIntervalSince1970)",

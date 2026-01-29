@@ -67,9 +67,12 @@ cat > "$OUTPUT_DIR/$BUNDLE_NAME/Contents/Info.plist" << EOF
 </plist>
 EOF
 
-# Copy app icon if exists
+# Copy app icons if exist
 if [ -f "Resources/AppIcon.icns" ]; then
     cp "Resources/AppIcon.icns" "$OUTPUT_DIR/$BUNDLE_NAME/Contents/Resources/"
+fi
+if [ -f "Resources/AppIcon.png" ]; then
+    cp "Resources/AppIcon.png" "$OUTPUT_DIR/$BUNDLE_NAME/Contents/Resources/"
 fi
 
 # Create PkgInfo
