@@ -2053,52 +2053,51 @@ class SessionManager {
 
     /// Re-schedule reminders for sessions that were persisted (e.g., after app restart)
     func restoreReminders() {
-        // First, clean up any orphaned reminders from previous app runs
-        cleanupOrphanedReminders()
+        // First, cancel ALL existing reminders synchronously to prevent orphaned reminders
+        // This is more aggressive but ensures no old reminders persist
+        cancelAllRemindersSynchronous()
 
-        for session in sessions where session.status == .completed {
-            guard let triggeredAt = session.alertTriggeredAt else { continue }
+        // Small delay to ensure cancellation is processed
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self else { return }
 
-            // Check if reminders should be enabled for this session
-            let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
-            let shouldRemind = session.reminderOverride ?? group?.reminderOverride ?? reminderEnabled
+            for session in self.sessions where session.status == .completed {
+                guard let triggeredAt = session.alertTriggeredAt else { continue }
 
-            if shouldRemind {
-                NSLog("Restoring reminders for session \(session.id), originally triggered at \(triggeredAt)")
-                scheduleReminders(for: session, triggeredAt: triggeredAt)
+                // Check if reminders should be enabled for this session
+                let group = session.groupId.flatMap { gid in self.groups.first { $0.id == gid } }
+                let shouldRemind = session.reminderOverride ?? group?.reminderOverride ?? self.reminderEnabled
+
+                if shouldRemind {
+                    NSLog("Restoring reminders for session \(session.id), originally triggered at \(triggeredAt)")
+                    self.scheduleReminders(for: session, triggeredAt: triggeredAt)
+                }
             }
         }
     }
 
-    /// Clean up orphaned reminders - reminders for sessions that no longer exist or are acknowledged
-    private func cleanupOrphanedReminders() {
-        // Get all valid session IDs that should have reminders (only .completed status)
-        let validSessionIds = Set(sessions.filter { $0.status == .completed }.map { $0.id })
+    /// Cancel all reminders synchronously using a semaphore
+    private func cancelAllRemindersSynchronous() {
+        let semaphore = DispatchSemaphore(value: 0)
 
-        UNUserNotificationCenter.current().getPendingNotificationRequests { [weak self] requests in
-            guard self != nil else { return }
-
-            var orphanedIds: [String] = []
-
-            for request in requests {
-                // Check if it's a reminder notification
-                if request.identifier.contains("-reminder-") {
-                    // Extract session ID from reminder identifier (format: "sessionId-reminder-X" or "sessionId-reminder-infinite")
-                    let parts = request.identifier.components(separatedBy: "-reminder-")
-                    if let sessionId = parts.first {
-                        // Check if session exists and is in completed status
-                        if !validSessionIds.contains(sessionId) {
-                            orphanedIds.append(request.identifier)
-                            NSLog("Found orphaned reminder: \(request.identifier) (session \(sessionId) not found or acknowledged)")
-                        }
-                    }
-                }
+        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+            let reminderIds = requests.filter { $0.identifier.contains("-reminder-") }.map { $0.identifier }
+            if !reminderIds.isEmpty {
+                NSLog("Cancelling ALL \(reminderIds.count) pending reminders on startup")
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: reminderIds)
             }
+            semaphore.signal()
+        }
 
-            if !orphanedIds.isEmpty {
-                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: orphanedIds)
-                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: orphanedIds)
-                NSLog("Cleaned up \(orphanedIds.count) orphaned reminders")
+        // Wait up to 2 seconds for the operation to complete
+        _ = semaphore.wait(timeout: .now() + 2.0)
+
+        // Also remove delivered reminder notifications
+        UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
+            let reminderIds = notifications.filter { $0.request.identifier.contains("-reminder-") }.map { $0.request.identifier }
+            if !reminderIds.isEmpty {
+                NSLog("Removing \(reminderIds.count) delivered reminder notifications")
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: reminderIds)
             }
         }
     }
