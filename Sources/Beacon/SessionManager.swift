@@ -730,18 +730,19 @@ class SessionManager {
     /// Handle immediate process exit notification
     /// Must be called on scanQueue
     private func handleProcessExitOnScanQueue(pid: Int32) {
-        // Find session with this PID and mark as completed
+        // Find session with this PID and remove it silently
+        // We don't send notifications on process exit because:
+        // 1. User might have pressed Ctrl+C to quit
+        // 2. Terminal might have been closed
+        // 3. Process might have crashed
+        // Notifications should only be sent via hooks when Claude actually completes a task
         if let index = self.sessions.firstIndex(where: { $0.pid == pid && $0.status == .running }) {
-            self.sessions[index].status = .completed
-            self.sessions[index].completedAt = Date()
-
             let session = self.sessions[index]
-            NSLog("Session marked completed via exit monitor: \(session.projectName)")
+            NSLog("Session removed (process exited, no notification): \(session.projectName)")
 
-            // Send notification (thread-safe)
-            self.sendCompletionNotification(for: session)
+            // Just remove the session - don't mark as completed or notify
+            self.sessions.remove(at: index)
             self.saveSessions()
-            self.trimOldSessions()
 
             // UI update on main thread
             DispatchQueue.main.async { [weak self] in
@@ -867,29 +868,29 @@ class SessionManager {
         // This is a fallback in case process monitors miss something
         let runningPids = Set(claudeProcesses.map { $0.pid })
 
-        // On first scan after startup, silently clean up stale sessions without notifications
-        let shouldNotify = !isFirstScan
-
+        // Remove running sessions whose processes have ended
+        // We don't send notifications here because process exit could be:
+        // - User pressed Ctrl+C
+        // - Terminal was closed
+        // - Process crashed
+        // Notifications should only come from Claude's hook when a task completes
+        var indicesToRemove: [Int] = []
         for i in sessions.indices {
             if sessions[i].status == .running, let pid = sessions[i].pid {
                 if !runningPids.contains(pid) {
-                    // Process ended - mark as completed (fallback if exit monitor didn't catch it)
-                    sessions[i].status = .completed
-                    sessions[i].completedAt = Date()
-
-                    if shouldNotify {
-                        sendCompletionNotification(for: sessions[i])
-                    } else {
-                        NSLog("Skipping notification for stale session on startup: \(sessions[i].projectName)")
-                    }
-                    saveSessions()
-                    trimOldSessions()
-                    needsUIUpdate = true
-
-                    // Clean up monitor if it exists
+                    NSLog("Removing session (process ended, no notification): \(sessions[i].projectName)")
+                    indicesToRemove.append(i)
                     stopProcessExitMonitor(pid: pid)
                 }
             }
+        }
+        // Remove in reverse order to maintain valid indices
+        for i in indicesToRemove.reversed() {
+            sessions.remove(at: i)
+        }
+        if !indicesToRemove.isEmpty {
+            saveSessions()
+            needsUIUpdate = true
         }
 
         // Mark first scan as complete
