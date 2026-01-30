@@ -1341,6 +1341,62 @@ class SessionManager {
         }
     }
 
+    /// Navigate to session using userInfo from notification (for reminders when session may not exist)
+    func navigateFromNotification(userInfo: [AnyHashable: Any]) {
+        debugFileLog("navigateFromNotification called with userInfo: \(userInfo)")
+
+        guard let terminalInfo = userInfo["terminalInfo"] as? String else {
+            debugFileLog("navigateFromNotification: no terminalInfo in userInfo")
+            return
+        }
+
+        let workingDirectory = userInfo["workingDirectory"] as? String ?? ""
+        let weztermPane = userInfo["weztermPane"] as? String ?? ""
+        let ttyName = userInfo["ttyName"] as? String ?? ""
+
+        debugFileLog("navigateFromNotification: terminal=\(terminalInfo), wezterm=\(weztermPane), tty=\(ttyName)")
+
+        // WezTerm
+        if terminalInfo == "WezTerm" {
+            if !weztermPane.isEmpty {
+                activateWezTermPaneById(paneId: weztermPane)
+            } else {
+                activateWezTermPane(workingDirectory: workingDirectory)
+            }
+            return
+        }
+
+        // Terminal.app
+        if terminalInfo.hasPrefix("Terminal") {
+            if !ttyName.isEmpty {
+                activateTerminalByTty(tty: ttyName)
+            } else {
+                activateApp("Terminal")
+            }
+            return
+        }
+
+        // PyCharm
+        if terminalInfo == "PyCharm" {
+            let projectName = userInfo["projectName"] as? String ?? ""
+            if !projectName.isEmpty || !workingDirectory.isEmpty {
+                activatePyCharmWindow(projectName: projectName, workingDirectory: workingDirectory)
+            } else {
+                activateApp("PyCharm")
+            }
+            return
+        }
+
+        // iTerm2
+        if terminalInfo == "iTerm2" {
+            activateApp("iTerm")
+            return
+        }
+
+        // Generic fallback
+        activateApp(terminalInfo)
+    }
+
     func navigateToSession(id: String) {
         debugFileLog("navigateToSession called for id: \(id)")
         NSLog("navigateToSession called for id: \(id)")
@@ -2078,7 +2134,17 @@ class SessionManager {
             content.title = "Reminder: Task Completed"
             content.body = "\(session.terminalInfo) · \(session.projectName) · \(completionTime)"
             content.sound = .default
-            content.userInfo = ["sessionId": session.id, "isReminder": true, "triggeredAt": triggeredAt.timeIntervalSince1970]
+            content.userInfo = [
+                "sessionId": session.id,
+                "isReminder": true,
+                "triggeredAt": triggeredAt.timeIntervalSince1970,
+                "terminalInfo": session.terminalInfo,
+                "workingDirectory": session.workingDirectory,
+                "projectName": session.projectName,
+                "weztermPane": session.weztermPane ?? "",
+                "ttyName": session.ttyName ?? "",
+                "pycharmWindow": session.pycharmWindow ?? ""
+            ]
             content.categoryIdentifier = SessionManager.notificationCategoryId
 
             let trigger = UNTimeIntervalNotificationTrigger(
@@ -2127,7 +2193,17 @@ class SessionManager {
                     content.title = "Reminder: Task Completed"
                     content.body = "\(session.terminalInfo) · \(session.projectName) · \(relativeTime)"
                     content.sound = .default
-                    content.userInfo = ["sessionId": session.id, "isReminder": true, "triggeredAt": triggeredAt.timeIntervalSince1970]
+                    content.userInfo = [
+                        "sessionId": session.id,
+                        "isReminder": true,
+                        "triggeredAt": triggeredAt.timeIntervalSince1970,
+                        "terminalInfo": session.terminalInfo,
+                        "workingDirectory": session.workingDirectory,
+                        "projectName": session.projectName,
+                        "weztermPane": session.weztermPane ?? "",
+                        "ttyName": session.ttyName ?? "",
+                        "pycharmWindow": session.pycharmWindow ?? ""
+                    ]
                     content.categoryIdentifier = SessionManager.notificationCategoryId
 
                     let trigger = UNTimeIntervalNotificationTrigger(

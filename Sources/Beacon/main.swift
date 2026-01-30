@@ -1494,6 +1494,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 if sessionExists {
                     sessionManager.navigateToSession(id: sessionId)
                     sessionManager.acknowledgeSession(id: sessionId)
+                } else if isReminder {
+                    // For reminders, use stored terminal info to navigate even if session is gone
+                    appendLog("Session not found, using notification userInfo for navigation")
+                    sessionManager.navigateFromNotification(userInfo: userInfo)
                 }
                 appendLog("Functions called successfully")
             } else if response.actionIdentifier == UNNotificationDismissActionIdentifier {
