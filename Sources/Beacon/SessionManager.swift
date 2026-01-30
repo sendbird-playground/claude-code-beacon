@@ -347,6 +347,10 @@ class SessionManager {
         }
     }
 
+    // Snooze reminders until this time (used when user clicks a notification)
+    private var remindersSnoozedUntil: Date?
+    private let snoozeMinutes: Int = 5  // Snooze for 5 minutes after clicking notification
+
     // Track reminder counts per session
     private var reminderCounts: [String: Int] = [:]
 
@@ -2052,6 +2056,13 @@ class SessionManager {
     }
 
     func scheduleReminders(for session: ClaudeSession, triggeredAt: Date) {
+        // Skip if reminders are snoozed (user recently clicked a notification)
+        if areRemindersSnoozed() {
+            NSLog("Skipping reminders for session \(session.id) - reminders are snoozed")
+            debugFileLog("Skipping reminders - snoozed until \(remindersSnoozedUntil!)")
+            return
+        }
+
         NSLog("Scheduling reminders for session \(session.id), triggered at: \(triggeredAt)")
 
         // Format the original completion time for display
@@ -2242,6 +2253,19 @@ class SessionManager {
         }
 
         debugFileLog("cancelAllReminders completed")
+    }
+
+    /// Snooze all reminders for a period of time
+    func snoozeReminders() {
+        remindersSnoozedUntil = Date().addingTimeInterval(TimeInterval(snoozeMinutes * 60))
+        debugFileLog("Reminders snoozed until \(remindersSnoozedUntil!)")
+        NSLog("Reminders snoozed for \(snoozeMinutes) minutes")
+    }
+
+    /// Check if reminders are currently snoozed
+    private func areRemindersSnoozed() -> Bool {
+        guard let snoozedUntil = remindersSnoozedUntil else { return false }
+        return Date() < snoozedUntil
     }
 
     private var englishSynthesizer: NSSpeechSynthesizer?

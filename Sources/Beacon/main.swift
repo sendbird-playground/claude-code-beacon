@@ -1478,9 +1478,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         if let sessionId = userInfo["sessionId"] as? String {
             appendLog("sessionId found: \(sessionId)")
 
-            // Cancel ALL reminders when user interacts with any notification
-            appendLog("Cancelling ALL reminders")
+            // Cancel ALL reminders and snooze future reminders
+            appendLog("Cancelling ALL reminders and snoozing")
             sessionManager.cancelAllReminders()
+            sessionManager.snoozeReminders()
 
             // Check if session exists
             let sessionExists = sessionManager.sessions.contains { $0.id == sessionId }
