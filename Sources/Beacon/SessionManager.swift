@@ -348,8 +348,19 @@ class SessionManager {
     }
 
     // Snooze reminders until this time (used when user clicks a notification)
-    private var remindersSnoozedUntil: Date?
+    private var _remindersSnoozedUntil: Date?
+    private var remindersSnoozedUntil: Date? {
+        get { _remindersSnoozedUntil }
+        set {
+            _remindersSnoozedUntil = newValue
+            saveSnoozeState()
+        }
+    }
     private let snoozeMinutes: Int = 5  // Snooze for 5 minutes after clicking notification
+    private var snoozeURL: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Beacon/snooze.json")
+    }
 
     // Track reminder counts per session
     private var reminderCounts: [String: Int] = [:]
@@ -377,6 +388,7 @@ class SessionManager {
         loadSessions()
         loadGroups()
         loadSettings()
+        loadSnoozeState()
         registerNotificationCategories()
         requestNotificationPermission()
         startHttpServer()
@@ -2340,8 +2352,8 @@ class SessionManager {
     }
 
     /// Check if reminders are currently snoozed
-    private func areRemindersSnoozed() -> Bool {
-        guard let snoozedUntil = remindersSnoozedUntil else { return false }
+    func areRemindersSnoozed() -> Bool {
+        guard let snoozedUntil = _remindersSnoozedUntil else { return false }
         return Date() < snoozedUntil
     }
 
@@ -2851,6 +2863,40 @@ class SessionManager {
             selectedKoreanVoice = settings.selectedKoreanVoice
         } catch {
             print("Failed to load settings: \(error)")
+        }
+    }
+
+    private func saveSnoozeState() {
+        do {
+            if let snoozedUntil = remindersSnoozedUntil {
+                let data = try JSONEncoder().encode(snoozedUntil)
+                try data.write(to: snoozeURL, options: .atomic)
+            } else {
+                // Remove the file if snooze is cleared
+                try? FileManager.default.removeItem(at: snoozeURL)
+            }
+        } catch {
+            NSLog("Failed to save snooze state: \(error)")
+        }
+    }
+
+    private func loadSnoozeState() {
+        guard FileManager.default.fileExists(atPath: snoozeURL.path) else { return }
+
+        do {
+            let data = try Data(contentsOf: snoozeURL)
+            let snoozedUntil = try JSONDecoder().decode(Date.self, from: data)
+            // Only restore if snooze is still valid (not expired)
+            if snoozedUntil > Date() {
+                // Set backing property directly to avoid triggering save
+                _remindersSnoozedUntil = snoozedUntil
+                NSLog("Restored snooze state until \(snoozedUntil)")
+            } else {
+                // Clean up expired snooze file
+                try? FileManager.default.removeItem(at: snoozeURL)
+            }
+        } catch {
+            NSLog("Failed to load snooze state: \(error)")
         }
     }
 

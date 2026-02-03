@@ -1443,7 +1443,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     // Show notifications even when app is in foreground
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        NSLog("Will present notification: \(notification.request.identifier)")
+        let identifier = notification.request.identifier
+        NSLog("Will present notification: \(identifier)")
+
+        // Check if this is a reminder notification
+        let isReminder = notification.request.content.userInfo["isReminder"] as? Bool ?? false
+
+        // Suppress reminder notifications if reminders are snoozed
+        if isReminder && sessionManager.areRemindersSnoozed() {
+            NSLog("Suppressing reminder notification (snoozed): \(identifier)")
+            // Cancel this specific notification
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+            completionHandler([])  // Don't show the notification
+            return
+        }
+
         completionHandler([.banner, .sound, .badge])
     }
 
