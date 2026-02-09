@@ -56,10 +56,13 @@ struct SessionsPopoverView: View {
             Divider()
 
             if viewModel.runningSessions.isEmpty {
-                Text("No running sessions")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
+                VStack {
+                    Spacer()
+                    Text("No running sessions")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, minHeight: 100)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
@@ -94,6 +97,7 @@ struct SessionsPopoverView: View {
 
         }
         .frame(width: 280)
+        .frame(minHeight: 150, maxHeight: 400)
     }
 }
 
@@ -288,10 +292,6 @@ struct GroupSettingsMenu: View {
                 get: { group.voiceOverride ?? true },
                 set: { viewModel.setGroupOverride(groupId: group.id, voice: $0) }
             ))
-            Toggle("Reminder", isOn: Binding(
-                get: { group.reminderOverride ?? true },
-                set: { viewModel.setGroupOverride(groupId: group.id, reminder: $0) }
-            ))
 
             Divider()
 
@@ -485,10 +485,6 @@ struct SessionSettingsMenu: View {
             Toggle("Voice", isOn: Binding(
                 get: { session.voiceOverride ?? true },
                 set: { viewModel.setSessionOverride(sessionId: session.id, voice: $0) }
-            ))
-            Toggle("Reminder", isOn: Binding(
-                get: { session.reminderOverride ?? true },
-                set: { viewModel.setSessionOverride(sessionId: session.id, reminder: $0) }
             ))
 
             Divider()
@@ -742,7 +738,7 @@ class SessionsViewModel: ObservableObject {
 
     // MARK: - Group Settings
 
-    func setGroupOverride(groupId: String, notification: Bool? = nil, sound: Bool? = nil, voice: Bool? = nil, reminder: Bool? = nil) {
+    func setGroupOverride(groupId: String, notification: Bool? = nil, sound: Bool? = nil, voice: Bool? = nil) {
         if let notification = notification {
             sessionManager.setGroupNotificationOverride(id: groupId, enabled: notification)
         }
@@ -752,16 +748,12 @@ class SessionsViewModel: ObservableObject {
         if let voice = voice {
             sessionManager.setGroupVoiceOverride(id: groupId, enabled: voice)
         }
-        if let reminder = reminder {
-            sessionManager.setGroupReminderOverride(id: groupId, enabled: reminder)
-        }
     }
 
     func clearGroupOverrides(groupId: String) {
         sessionManager.setGroupNotificationOverride(id: groupId, enabled: nil)
         sessionManager.setGroupSoundOverride(id: groupId, enabled: nil)
         sessionManager.setGroupVoiceOverride(id: groupId, enabled: nil)
-        sessionManager.setGroupReminderOverride(id: groupId, enabled: nil)
     }
 
     func setGroupColor(groupId: String, colorHex: String) {
@@ -782,7 +774,7 @@ class SessionsViewModel: ObservableObject {
 
     // MARK: - Session Settings
 
-    func setSessionOverride(sessionId: String, notification: Bool? = nil, sound: Bool? = nil, voice: Bool? = nil, reminder: Bool? = nil) {
+    func setSessionOverride(sessionId: String, notification: Bool? = nil, sound: Bool? = nil, voice: Bool? = nil) {
         if let notification = notification {
             sessionManager.setSessionNotificationOverride(id: sessionId, enabled: notification)
         }
@@ -792,16 +784,12 @@ class SessionsViewModel: ObservableObject {
         if let voice = voice {
             sessionManager.setSessionVoiceOverride(id: sessionId, enabled: voice)
         }
-        if let reminder = reminder {
-            sessionManager.setSessionReminderOverride(id: sessionId, enabled: reminder)
-        }
     }
 
     func clearSessionOverrides(sessionId: String) {
         sessionManager.setSessionNotificationOverride(id: sessionId, enabled: nil)
         sessionManager.setSessionSoundOverride(id: sessionId, enabled: nil)
         sessionManager.setSessionVoiceOverride(id: sessionId, enabled: nil)
-        sessionManager.setSessionReminderOverride(id: sessionId, enabled: nil)
     }
 
     func reorderSession(_ session: ClaudeSession, before targetSession: ClaudeSession?) {
@@ -820,9 +808,6 @@ struct SettingsView: View {
     @State private var notificationEnabled: Bool
     @State private var soundEnabled: Bool
     @State private var voiceEnabled: Bool
-    @State private var reminderEnabled: Bool
-    @State private var reminderInterval: Int
-    @State private var reminderCount: Int
     @State private var groups: [SessionGroup]
     @State private var showingAddGroup = false
     @State private var newGroupName = ""
@@ -839,9 +824,6 @@ struct SettingsView: View {
         _notificationEnabled = State(initialValue: sessionManager.notificationEnabled)
         _soundEnabled = State(initialValue: sessionManager.soundEnabled)
         _voiceEnabled = State(initialValue: sessionManager.voiceEnabled)
-        _reminderEnabled = State(initialValue: sessionManager.reminderEnabled)
-        _reminderInterval = State(initialValue: sessionManager.reminderInterval)
-        _reminderCount = State(initialValue: sessionManager.reminderCount)
         _groups = State(initialValue: sessionManager.groups)
         _pronunciationRules = State(initialValue: sessionManager.pronunciationRules)
 
@@ -862,7 +844,7 @@ struct SettingsView: View {
                 .frame(height: 12)
 
             TabView(selection: $selectedTab) {
-                // General Tab - Alerts, Reminders, About
+                // General Tab - Alerts, About
                 generalTab
                     .tabItem {
                         Label("General", systemImage: "gear")
@@ -965,34 +947,6 @@ struct SettingsView: View {
 
                 Button("Test Alerts") {
                     sessionManager.testAlerts()
-                }
-            }
-
-            Section("Reminders") {
-                Toggle("Enabled", isOn: $reminderEnabled)
-                    .onChange(of: reminderEnabled) { new in
-                        sessionManager.reminderEnabled = new
-                    }
-
-                Picker("Interval", selection: $reminderInterval) {
-                    Text("1 min").tag(60)
-                    Text("2 min").tag(120)
-                    Text("5 min").tag(300)
-                    Text("10 min").tag(600)
-                }
-                .onChange(of: reminderInterval) { new in
-                    sessionManager.reminderInterval = new
-                }
-
-                Picker("Count", selection: $reminderCount) {
-                    Text("1").tag(1)
-                    Text("2").tag(2)
-                    Text("3").tag(3)
-                    Text("5").tag(5)
-                    Text("∞ Infinite").tag(0)
-                }
-                .onChange(of: reminderCount) { new in
-                    sessionManager.reminderCount = new
                 }
             }
 
@@ -1414,6 +1368,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     var eventMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Log app launch
+        let logPath = NSHomeDirectory() + "/beacon_notification_debug.log"
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "\(timestamp) - App launched\n"
+        if let data = line.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logPath) {
+                if let handle = FileHandle(forWritingAtPath: logPath) {
+                    handle.seekToEndOfFile()
+                    handle.write(data)
+                    handle.closeFile()
+                }
+            } else {
+                FileManager.default.createFile(atPath: logPath, contents: data)
+            }
+        }
+
         // Set notification delegate FIRST
         UNUserNotificationCenter.current().delegate = self
 
@@ -1426,15 +1396,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Setup popover
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 280, height: 400)
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: SessionsPopoverView(viewModel: viewModel))
+
+        let hostingController = NSHostingController(rootView: SessionsPopoverView(viewModel: viewModel))
+        hostingController.view.frame = NSRect(x: 0, y: 0, width: 280, height: 400)
+        popover.contentViewController = hostingController
+        popover.contentSize = NSSize(width: 280, height: 400)
 
         // Setup menu bar
         setupMenuBar()
 
-        // Start monitoring
+        // Start monitoring (runs initial scan synchronously)
         sessionManager.startMonitoring()
+
+        // Refresh view model after initial scan completes
+        viewModel.refresh()
 
         NSLog("Beacon is running in the menu bar")
     }
@@ -1443,88 +1419,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     // Show notifications even when app is in foreground
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        let identifier = notification.request.identifier
-        NSLog("Will present notification: \(identifier)")
-
-        // Check if this is a reminder notification
-        let isReminder = notification.request.content.userInfo["isReminder"] as? Bool ?? false
-
-        // Suppress reminder notifications if reminders are snoozed
-        if isReminder && sessionManager.areRemindersSnoozed() {
-            NSLog("Suppressing reminder notification (snoozed): \(identifier)")
-            // Cancel this specific notification
-            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
-            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
-            completionHandler([])  // Don't show the notification
-            return
-        }
-
+        NSLog("Will present notification: \(notification.request.identifier)")
         completionHandler([.banner, .sound, .badge])
     }
 
     // Handle notification click or action button
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         let userInfo = response.notification.request.content.userInfo
-        let isReminder = userInfo["isReminder"] as? Bool ?? false
 
-        // Debug: write to file to verify handler is called
-        let logPath = NSHomeDirectory() + "/beacon_notification_debug.log"
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-
-        func appendLog(_ message: String) {
-            let line = "\(timestamp) - \(message)\n"
-            if let data = line.data(using: .utf8) {
-                if FileManager.default.fileExists(atPath: logPath) {
-                    if let handle = FileHandle(forWritingAtPath: logPath) {
-                        handle.seekToEndOfFile()
-                        handle.write(data)
-                        handle.closeFile()
-                    }
-                } else {
-                    FileManager.default.createFile(atPath: logPath, contents: data)
-                }
-            }
-        }
-
-        appendLog("didReceive called, isReminder: \(isReminder), action: \(response.actionIdentifier)")
-
-        NSLog("Notification response received - isReminder: \(isReminder), userInfo: \(userInfo)")
+        NSLog("Notification response received - action: \(response.actionIdentifier), userInfo: \(userInfo)")
 
         if let sessionId = userInfo["sessionId"] as? String {
-            appendLog("sessionId found: \(sessionId)")
-
-            // Cancel ALL reminders and snooze future reminders
-            appendLog("Cancelling ALL reminders and snoozing")
-            sessionManager.cancelAllReminders()
-            sessionManager.snoozeReminders()
-
-            // Check if session exists
             let sessionExists = sessionManager.sessions.contains { $0.id == sessionId }
-            appendLog("session exists in list: \(sessionExists)")
 
-            // Handle click or dismiss
             if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
                 // User clicked notification - navigate to session
-                appendLog("Calling navigateToSession and acknowledgeSession")
                 if sessionExists {
                     sessionManager.navigateToSession(id: sessionId)
                     sessionManager.acknowledgeSession(id: sessionId)
-                } else if isReminder {
-                    // For reminders, use stored terminal info to navigate even if session is gone
-                    appendLog("Session not found, using notification userInfo for navigation")
-                    sessionManager.navigateFromNotification(userInfo: userInfo)
                 }
-                appendLog("Functions called successfully")
             } else if response.actionIdentifier == UNNotificationDismissActionIdentifier {
-                // User dismissed the notification - just acknowledge (cancel reminders)
-                appendLog("Dismiss action - calling acknowledgeSession only")
+                // User dismissed the notification - just acknowledge
                 if sessionExists {
                     sessionManager.acknowledgeSession(id: sessionId)
                 }
             }
-        } else {
-            appendLog("No sessionId found in userInfo: \(userInfo)")
-            NSLog("No sessionId found in notification userInfo")
         }
         completionHandler()
     }
@@ -1561,23 +1480,57 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func showPopover() {
-        if let button = statusItem.button {
-            // Ensure the button has valid bounds (can be invalid right after app launch)
-            guard button.bounds.width > 0 && button.bounds.height > 0 else {
-                // Retry after a short delay if bounds not ready
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                    self?.showPopover()
+        let logPath = NSHomeDirectory() + "/beacon_popover_debug.log"
+        func debugLog(_ msg: String) {
+            let line = "\(Date()) - \(msg)\n"
+            if let data = line.data(using: .utf8) {
+                if FileManager.default.fileExists(atPath: logPath) {
+                    if let handle = FileHandle(forWritingAtPath: logPath) {
+                        handle.seekToEndOfFile()
+                        handle.write(data)
+                        handle.closeFile()
+                    }
+                } else {
+                    FileManager.default.createFile(atPath: logPath, contents: data)
                 }
-                return
             }
+        }
 
-            viewModel.refresh()
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        debugLog("showPopover called")
 
-            // Close popover when clicking outside
-            eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-                self?.closePopover()
+        guard let button = statusItem.button else {
+            debugLog("statusItem.button is nil")
+            return
+        }
+
+        debugLog("button exists, bounds=\(button.bounds)")
+
+        // Ensure the button has valid bounds and window
+        guard button.bounds.width > 0 && button.bounds.height > 0 else {
+            debugLog("button bounds invalid, retrying...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.showPopover()
             }
+            return
+        }
+
+        guard let window = button.window else {
+            debugLog("button.window is nil, retrying...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.showPopover()
+            }
+            return
+        }
+
+        debugLog("window exists: \(window), frame=\(window.frame)")
+
+        viewModel.refresh()
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        debugLog("popover.show called")
+
+        // Close popover when clicking outside
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.closePopover()
         }
     }
 

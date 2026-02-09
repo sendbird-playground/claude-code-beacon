@@ -93,7 +93,6 @@ struct SessionGroup: Identifiable, Codable {
     var notificationOverride: Bool?
     var soundOverride: Bool?
     var voiceOverride: Bool?
-    var reminderOverride: Bool?
 
     init(
         id: String = UUID().uuidString,
@@ -103,8 +102,7 @@ struct SessionGroup: Identifiable, Codable {
         isExpanded: Bool = true,
         notificationOverride: Bool? = nil,
         soundOverride: Bool? = nil,
-        voiceOverride: Bool? = nil,
-        reminderOverride: Bool? = nil
+        voiceOverride: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -114,7 +112,6 @@ struct SessionGroup: Identifiable, Codable {
         self.notificationOverride = notificationOverride
         self.soundOverride = soundOverride
         self.voiceOverride = voiceOverride
-        self.reminderOverride = reminderOverride
     }
 
     // Custom decoder for backward compatibility
@@ -128,7 +125,6 @@ struct SessionGroup: Identifiable, Codable {
         notificationOverride = try container.decodeIfPresent(Bool.self, forKey: .notificationOverride)
         soundOverride = try container.decodeIfPresent(Bool.self, forKey: .soundOverride)
         voiceOverride = try container.decodeIfPresent(Bool.self, forKey: .voiceOverride)
-        reminderOverride = try container.decodeIfPresent(Bool.self, forKey: .reminderOverride)
     }
 
     // Predefined pastel colors for easy selection
@@ -165,14 +161,12 @@ struct ClaudeSession: Identifiable, Codable {
     var notificationOverride: Bool?
     var soundOverride: Bool?
     var voiceOverride: Bool?
-    var reminderOverride: Bool?
 
     // Group assignment (nil = ungrouped)
     var groupId: String?
 
-    // Reminder tracking - when alert was first triggered and how many reminders sent
+    // Tracking - when alert was first triggered
     var alertTriggeredAt: Date?
-    var remindersSent: Int = 0
 
     // Manual ordering within group (lower = higher in list)
     var orderInGroup: Int = 0
@@ -199,10 +193,8 @@ struct ClaudeSession: Identifiable, Codable {
         notificationOverride: Bool? = nil,
         soundOverride: Bool? = nil,
         voiceOverride: Bool? = nil,
-        reminderOverride: Bool? = nil,
         groupId: String? = nil,
         alertTriggeredAt: Date? = nil,
-        remindersSent: Int = 0,
         orderInGroup: Int = 0,
         detectedMidRun: Bool = false
     ) {
@@ -224,10 +216,8 @@ struct ClaudeSession: Identifiable, Codable {
         self.notificationOverride = notificationOverride
         self.soundOverride = soundOverride
         self.voiceOverride = voiceOverride
-        self.reminderOverride = reminderOverride
         self.groupId = groupId
         self.alertTriggeredAt = alertTriggeredAt
-        self.remindersSent = remindersSent
         self.orderInGroup = orderInGroup
         self.detectedMidRun = detectedMidRun
     }
@@ -253,11 +243,9 @@ struct ClaudeSession: Identifiable, Codable {
         notificationOverride = try container.decodeIfPresent(Bool.self, forKey: .notificationOverride)
         soundOverride = try container.decodeIfPresent(Bool.self, forKey: .soundOverride)
         voiceOverride = try container.decodeIfPresent(Bool.self, forKey: .voiceOverride)
-        reminderOverride = try container.decodeIfPresent(Bool.self, forKey: .reminderOverride)
         groupId = try container.decodeIfPresent(String.self, forKey: .groupId)
         alertTriggeredAt = try container.decodeIfPresent(Date.self, forKey: .alertTriggeredAt)
         // Fields with defaults for backward compatibility
-        remindersSent = try container.decodeIfPresent(Int.self, forKey: .remindersSent) ?? 0
         orderInGroup = try container.decodeIfPresent(Int.self, forKey: .orderInGroup) ?? 0
         detectedMidRun = try container.decodeIfPresent(Bool.self, forKey: .detectedMidRun) ?? false
     }
@@ -313,19 +301,6 @@ class SessionManager {
         }
     }
 
-    // Reminder settings
-    var reminderEnabled: Bool = false {
-        didSet { saveSettings() }
-    }
-
-    var reminderInterval: Int = 60 {  // seconds
-        didSet { saveSettings() }
-    }
-
-    var reminderCount: Int = 3 {
-        didSet { saveSettings() }
-    }
-
     // Voice pronunciation rules: "pattern" -> "pronunciation"
     var pronunciationRules: [String: String] = [:] {
         didSet { saveSettings() }
@@ -346,24 +321,6 @@ class SessionManager {
             koreanSynthesizer = nil
         }
     }
-
-    // Snooze reminders until this time (used when user clicks a notification)
-    private var _remindersSnoozedUntil: Date?
-    private var remindersSnoozedUntil: Date? {
-        get { _remindersSnoozedUntil }
-        set {
-            _remindersSnoozedUntil = newValue
-            saveSnoozeState()
-        }
-    }
-    private let snoozeMinutes: Int = 5  // Snooze for 5 minutes after clicking notification
-    private var snoozeURL: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("Beacon/snooze.json")
-    }
-
-    // Track reminder counts per session
-    private var reminderCounts: [String: Int] = [:]
 
     // Flag to skip notifications on first scan after startup (stale sessions)
     private var isFirstScan: Bool = true
@@ -388,11 +345,9 @@ class SessionManager {
         loadSessions()
         loadGroups()
         loadSettings()
-        loadSnoozeState()
         registerNotificationCategories()
         requestNotificationPermission()
         startHttpServer()
-        restoreReminders()
 
         debugLog("SessionManager init complete - voiceEnabled:\(voiceEnabled) soundEnabled:\(soundEnabled)")
 
@@ -693,9 +648,9 @@ class SessionManager {
     }
 
     func startMonitoring() {
-        // Defer initial scan to background to avoid blocking startup
-        scanQueue.async { [weak self] in
-            self?.scanForSessions()
+        // Run initial scan synchronously to ensure sessions are detected before UI shows
+        scanQueue.sync {
+            self.scanForSessions()
         }
 
         // Monitor every 5 seconds for new sessions (termination is handled by process monitors)
@@ -1735,14 +1690,6 @@ class SessionManager {
         }
     }
 
-    func setSessionReminderOverride(id: String, enabled: Bool?) {
-        if let index = sessions.firstIndex(where: { $0.id == id }) {
-            sessions[index].reminderOverride = enabled
-            saveSessions()
-            onSessionsChanged?()
-        }
-    }
-
     func getEffectiveNotification(for session: ClaudeSession) -> Bool {
         let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
         return session.notificationOverride ?? group?.notificationOverride ?? notificationEnabled
@@ -1756,11 +1703,6 @@ class SessionManager {
     func getEffectiveVoice(for session: ClaudeSession) -> Bool {
         let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
         return session.voiceOverride ?? group?.voiceOverride ?? voiceEnabled
-    }
-
-    func getEffectiveReminder(for session: ClaudeSession) -> Bool {
-        let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
-        return session.reminderOverride ?? group?.reminderOverride ?? reminderEnabled
     }
 
     func setSessionGroup(sessionId: String, groupId: String?) {
@@ -1907,14 +1849,6 @@ class SessionManager {
         }
     }
 
-    func setGroupReminderOverride(id: String, enabled: Bool?) {
-        if let index = groups.firstIndex(where: { $0.id == id }) {
-            groups[index].reminderOverride = enabled
-            saveGroups()
-            onSessionsChanged?()
-        }
-    }
-
     func toggleGroupExpanded(id: String) {
         if let index = groups.firstIndex(where: { $0.id == id }) {
             groups[index].isExpanded.toggle()
@@ -2053,20 +1987,17 @@ class SessionManager {
         let shouldNotify = session.notificationOverride ?? group?.notificationOverride ?? notificationEnabled
         let shouldSound = session.soundOverride ?? group?.soundOverride ?? soundEnabled
         let shouldVoice = session.voiceOverride ?? group?.voiceOverride ?? voiceEnabled
-        let shouldRemind = session.reminderOverride ?? group?.reminderOverride ?? reminderEnabled
 
         // Check DND/Focus mode
         let dndActive = isDNDEnabled()
         debugLog("DND/Focus mode active: \(dndActive)")
 
-        debugLog("Settings - notify:\(shouldNotify) sound:\(shouldSound) voice:\(shouldVoice) remind:\(shouldRemind)")
+        debugLog("Settings - notify:\(shouldNotify) sound:\(shouldSound) voice:\(shouldVoice)")
         debugLog("Global settings - soundEnabled:\(soundEnabled) voiceEnabled:\(voiceEnabled)")
 
         // Record when alert was triggered for this session
-        let triggerTime = Date()
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
-            sessions[index].alertTriggeredAt = triggerTime
-            sessions[index].remindersSent = 0
+            sessions[index].alertTriggeredAt = Date()
             saveSessions()
         }
 
@@ -2096,11 +2027,6 @@ class SessionManager {
                     debugLog("Notification scheduled successfully for: \(session.projectName)")
                 }
             }
-
-            // Schedule reminders if enabled
-            if shouldRemind {
-                scheduleReminders(for: session, triggeredAt: triggerTime)
-            }
         }
 
         // Play sound if enabled (suppress if DND active)
@@ -2122,239 +2048,6 @@ class SessionManager {
         } else {
             debugLog("Voice disabled, not speaking")
         }
-    }
-
-    func scheduleReminders(for session: ClaudeSession, triggeredAt: Date) {
-        // Skip if reminders are snoozed (user recently clicked a notification)
-        if areRemindersSnoozed() {
-            NSLog("Skipping reminders for session \(session.id) - reminders are snoozed")
-            debugFileLog("Skipping reminders - snoozed until \(remindersSnoozedUntil!)")
-            return
-        }
-
-        NSLog("Scheduling reminders for session \(session.id), triggered at: \(triggeredAt)")
-
-        // Format the original completion time for display
-        let timeFormatter = DateFormatter()
-        timeFormatter.dateFormat = "h:mm a"
-        let completionTime = timeFormatter.string(from: triggeredAt)
-
-        if reminderCount == 0 {
-            // Infinite: use repeating trigger (minimum 60 seconds for repeating)
-            let interval = max(60, reminderInterval)
-
-            let content = UNMutableNotificationContent()
-            content.title = "Reminder: Task Completed"
-            content.body = "\(session.terminalInfo) · \(session.projectName) · \(completionTime)"
-            content.sound = .default
-            content.userInfo = [
-                "sessionId": session.id,
-                "isReminder": true,
-                "triggeredAt": triggeredAt.timeIntervalSince1970,
-                "terminalInfo": session.terminalInfo,
-                "workingDirectory": session.workingDirectory,
-                "projectName": session.projectName,
-                "weztermPane": session.weztermPane ?? "",
-                "ttyName": session.ttyName ?? "",
-                "pycharmWindow": session.pycharmWindow ?? ""
-            ]
-            content.categoryIdentifier = SessionManager.notificationCategoryId
-
-            let trigger = UNTimeIntervalNotificationTrigger(
-                timeInterval: TimeInterval(interval),
-                repeats: true
-            )
-
-            let request = UNNotificationRequest(
-                identifier: "\(session.id)-reminder-infinite",
-                content: content,
-                trigger: trigger
-            )
-
-            UNUserNotificationCenter.current().add(request) { error in
-                if let error = error {
-                    NSLog("Failed to schedule infinite reminder: \(error)")
-                } else {
-                    NSLog("Infinite reminder scheduled every \(interval)s for session \(session.id)")
-                }
-            }
-        } else {
-            // Finite: schedule specific number of reminders at intervals from trigger time
-            for i in 1...reminderCount {
-                // Calculate when this reminder should fire based on original trigger time
-                let reminderTime = triggeredAt.addingTimeInterval(TimeInterval(reminderInterval * i))
-                let now = Date()
-
-                // Only schedule if the reminder time is in the future
-                let timeUntilReminder = reminderTime.timeIntervalSince(now)
-                if timeUntilReminder > 0 {
-                    // Calculate how long ago the task will have completed when reminder fires
-                    let minutesAgo = (reminderInterval * i) / 60
-                    let hoursAgo = minutesAgo / 60
-                    let relativeTime: String
-                    if minutesAgo == 1 {
-                        relativeTime = "1 min ago"
-                    } else if minutesAgo < 60 {
-                        relativeTime = "\(minutesAgo) min ago"
-                    } else if hoursAgo == 1 {
-                        relativeTime = "1 hour ago"
-                    } else {
-                        relativeTime = "\(hoursAgo) hours ago"
-                    }
-
-                    let content = UNMutableNotificationContent()
-                    content.title = "Reminder: Task Completed"
-                    content.body = "\(session.terminalInfo) · \(session.projectName) · \(relativeTime)"
-                    content.sound = .default
-                    content.userInfo = [
-                        "sessionId": session.id,
-                        "isReminder": true,
-                        "triggeredAt": triggeredAt.timeIntervalSince1970,
-                        "terminalInfo": session.terminalInfo,
-                        "workingDirectory": session.workingDirectory,
-                        "projectName": session.projectName,
-                        "weztermPane": session.weztermPane ?? "",
-                        "ttyName": session.ttyName ?? "",
-                        "pycharmWindow": session.pycharmWindow ?? ""
-                    ]
-                    content.categoryIdentifier = SessionManager.notificationCategoryId
-
-                    let trigger = UNTimeIntervalNotificationTrigger(
-                        timeInterval: timeUntilReminder,
-                        repeats: false
-                    )
-
-                    let request = UNNotificationRequest(
-                        identifier: "\(session.id)-reminder-\(i)",
-                        content: content,
-                        trigger: trigger
-                    )
-
-                    UNUserNotificationCenter.current().add(request) { [weak self] error in
-                        if let error = error {
-                            NSLog("Failed to schedule reminder \(i): \(error)")
-                        } else {
-                            NSLog("Reminder \(i) for session \(session.id) scheduled at \(reminderTime) (in \(timeUntilReminder)s)")
-                            // Track that reminder was scheduled
-                            if let self = self, let index = self.sessions.firstIndex(where: { $0.id == session.id }) {
-                                self.sessions[index].remindersSent = i
-                                self.saveSessions()
-                            }
-                        }
-                    }
-                } else {
-                    NSLog("Skipping reminder \(i) for session \(session.id) - time already passed")
-                }
-            }
-        }
-    }
-
-    /// Re-schedule reminders for sessions that were persisted (e.g., after app restart)
-    func restoreReminders() {
-        // First, cancel ALL existing reminders synchronously to prevent orphaned reminders
-        // This is more aggressive but ensures no old reminders persist
-        cancelAllRemindersSynchronous()
-
-        // Small delay to ensure cancellation is processed
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self = self else { return }
-
-            for session in self.sessions where session.status == .completed {
-                guard let triggeredAt = session.alertTriggeredAt else { continue }
-
-                // Check if reminders should be enabled for this session
-                let group = session.groupId.flatMap { gid in self.groups.first { $0.id == gid } }
-                let shouldRemind = session.reminderOverride ?? group?.reminderOverride ?? self.reminderEnabled
-
-                if shouldRemind {
-                    NSLog("Restoring reminders for session \(session.id), originally triggered at \(triggeredAt)")
-                    self.scheduleReminders(for: session, triggeredAt: triggeredAt)
-                }
-            }
-        }
-    }
-
-    /// Cancel all reminders synchronously using a semaphore
-    private func cancelAllRemindersSynchronous() {
-        let semaphore = DispatchSemaphore(value: 0)
-
-        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
-            let reminderIds = requests.filter { $0.identifier.contains("-reminder-") }.map { $0.identifier }
-            if !reminderIds.isEmpty {
-                NSLog("Cancelling ALL \(reminderIds.count) pending reminders on startup")
-                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: reminderIds)
-            }
-            semaphore.signal()
-        }
-
-        // Wait up to 2 seconds for the operation to complete
-        _ = semaphore.wait(timeout: .now() + 2.0)
-
-        // Also remove delivered reminder notifications
-        UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
-            let reminderIds = notifications.filter { $0.request.identifier.contains("-reminder-") }.map { $0.request.identifier }
-            if !reminderIds.isEmpty {
-                NSLog("Removing \(reminderIds.count) delivered reminder notifications")
-                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: reminderIds)
-            }
-        }
-    }
-
-    func cancelReminders(for sessionId: String) {
-        debugFileLog("cancelReminders called for: \(sessionId)")
-        // Cancel infinite reminder
-        let infiniteId = "\(sessionId)-reminder-infinite"
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [infiniteId])
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [infiniteId])
-
-        // Cancel finite reminders (use a reasonable max to cover all cases)
-        var identifiers: [String] = []
-        let maxCount = max(reminderCount, 10)
-        for i in 1...maxCount {
-            identifiers.append("\(sessionId)-reminder-\(i)")
-        }
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
-
-        debugFileLog("cancelReminders: removed pending and delivered for \(sessionId)")
-        NSLog("Cancelled reminders for session \(sessionId)")
-    }
-
-    func cancelAllReminders() {
-        debugFileLog("cancelAllReminders called")
-
-        // Cancel all pending reminder notifications
-        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
-            let reminderIds = requests.filter { $0.identifier.contains("-reminder-") }.map { $0.identifier }
-            if !reminderIds.isEmpty {
-                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: reminderIds)
-                NSLog("Cancelled \(reminderIds.count) pending reminders: \(reminderIds)")
-            }
-        }
-
-        // Also remove all delivered reminder notifications
-        UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
-            let reminderIds = notifications.filter { $0.request.identifier.contains("-reminder-") }.map { $0.request.identifier }
-            if !reminderIds.isEmpty {
-                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: reminderIds)
-                NSLog("Removed \(reminderIds.count) delivered reminders")
-            }
-        }
-
-        debugFileLog("cancelAllReminders completed")
-    }
-
-    /// Snooze all reminders for a period of time
-    func snoozeReminders() {
-        remindersSnoozedUntil = Date().addingTimeInterval(TimeInterval(snoozeMinutes * 60))
-        debugFileLog("Reminders snoozed until \(remindersSnoozedUntil!)")
-        NSLog("Reminders snoozed for \(snoozeMinutes) minutes")
-    }
-
-    /// Check if reminders are currently snoozed
-    func areRemindersSnoozed() -> Bool {
-        guard let snoozedUntil = _remindersSnoozedUntil else { return false }
-        return Date() < snoozedUntil
     }
 
     private var englishSynthesizer: NSSpeechSynthesizer?
@@ -2559,12 +2252,8 @@ class SessionManager {
     }
 
     func cancelNotifications(for sessionId: String) {
-        // Cancel main notification
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [sessionId])
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [sessionId])
-
-        // Cancel reminders
-        cancelReminders(for: sessionId)
     }
 
     private var alertSound: NSSound?
@@ -2600,13 +2289,22 @@ class SessionManager {
                 return
             }
 
-            // Test with English voice
+            // Stop any ongoing speech
+            self.englishSynthesizer?.stopSpeaking()
+            self.koreanSynthesizer?.stopSpeaking()
+
+            // Use selected English voice (same as speakSummary)
             if self.englishSynthesizer == nil {
-                debugLog("Creating new NSSpeechSynthesizer for test (English)")
-                self.englishSynthesizer = NSSpeechSynthesizer()
+                if let englishVoice = self.findEnglishVoice() {
+                    debugLog("Creating English synthesizer with voice: \(englishVoice.rawValue)")
+                    self.englishSynthesizer = NSSpeechSynthesizer(voice: englishVoice)
+                } else {
+                    debugLog("Using default English voice")
+                    self.englishSynthesizer = NSSpeechSynthesizer()
+                }
             }
 
-            let testText = "Hello, this is a test"
+            let testText = "Task completed"
             debugLog("Speaking test: \(testText)")
             let success = self.englishSynthesizer?.startSpeaking(testText) ?? false
             debugLog("testVoice startSpeaking returned: \(success)")
@@ -2614,7 +2312,7 @@ class SessionManager {
     }
 
     func testAlerts() {
-        debugLog("Testing alerts with current settings - notification:\(notificationEnabled) sound:\(soundEnabled) voice:\(voiceEnabled) reminder:\(reminderEnabled)")
+        debugLog("Testing alerts with current settings - notification:\(notificationEnabled) sound:\(soundEnabled) voice:\(voiceEnabled)")
 
         // Generate a unique test session ID for this test
         let testSessionId = "test-\(UUID().uuidString)"
@@ -2644,11 +2342,6 @@ class SessionManager {
                     debugLog("Test notification sent successfully")
                 }
             }
-
-            // Schedule test reminders if enabled
-            if reminderEnabled {
-                scheduleTestReminders(testSessionId: testSessionId)
-            }
         }
 
         // Test sound if enabled
@@ -2659,63 +2352,6 @@ class SessionManager {
         // Test voice if enabled
         if voiceEnabled {
             testVoice()
-        }
-    }
-
-    /// Schedule reminders for test notification
-    private func scheduleTestReminders(testSessionId: String) {
-        let content = UNMutableNotificationContent()
-        content.title = "Reminder: Test Alert"
-        content.body = "Test reminder from Beacon"
-        content.sound = .default
-        content.userInfo = ["sessionId": testSessionId, "isReminder": true, "isTest": true]
-        content.categoryIdentifier = SessionManager.notificationCategoryId
-
-        debugLog("Scheduling test reminders for \(testSessionId)")
-
-        if reminderCount == 0 {
-            // Infinite: use repeating trigger (minimum 60 seconds for repeating)
-            let interval = max(60, reminderInterval)
-            let trigger = UNTimeIntervalNotificationTrigger(
-                timeInterval: TimeInterval(interval),
-                repeats: true
-            )
-
-            let request = UNNotificationRequest(
-                identifier: "\(testSessionId)-reminder-infinite",
-                content: content,
-                trigger: trigger
-            )
-
-            UNUserNotificationCenter.current().add(request) { error in
-                if let error = error {
-                    debugLog("Failed to schedule test infinite reminder: \(error)")
-                } else {
-                    debugLog("Test infinite reminder scheduled every \(interval)s")
-                }
-            }
-        } else {
-            // Finite: schedule specific number of reminders
-            for i in 1...reminderCount {
-                let trigger = UNTimeIntervalNotificationTrigger(
-                    timeInterval: TimeInterval(reminderInterval * i),
-                    repeats: false
-                )
-
-                let request = UNNotificationRequest(
-                    identifier: "\(testSessionId)-reminder-\(i)",
-                    content: content,
-                    trigger: trigger
-                )
-
-                UNUserNotificationCenter.current().add(request) { error in
-                    if let error = error {
-                        debugLog("Failed to schedule test reminder \(i): \(error)")
-                    } else {
-                        debugLog("Test reminder \(i) scheduled in \(self.reminderInterval * i)s")
-                    }
-                }
-            }
         }
     }
 
@@ -2788,9 +2424,6 @@ class SessionManager {
         var soundEnabled: Bool
         var voiceEnabled: Bool
         var maxRecentSessions: Int
-        var reminderEnabled: Bool
-        var reminderInterval: Int
-        var reminderCount: Int
         var pronunciationRules: [String: String]
         var selectedEnglishVoice: String
         var selectedKoreanVoice: String
@@ -2802,22 +2435,16 @@ class SessionManager {
             soundEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? true
             voiceEnabled = try container.decodeIfPresent(Bool.self, forKey: .voiceEnabled) ?? true
             maxRecentSessions = try container.decodeIfPresent(Int.self, forKey: .maxRecentSessions) ?? 10
-            reminderEnabled = try container.decodeIfPresent(Bool.self, forKey: .reminderEnabled) ?? false
-            reminderInterval = try container.decodeIfPresent(Int.self, forKey: .reminderInterval) ?? 60
-            reminderCount = try container.decodeIfPresent(Int.self, forKey: .reminderCount) ?? 3
             pronunciationRules = try container.decodeIfPresent([String: String].self, forKey: .pronunciationRules) ?? [:]
             selectedEnglishVoice = try container.decodeIfPresent(String.self, forKey: .selectedEnglishVoice) ?? ""
             selectedKoreanVoice = try container.decodeIfPresent(String.self, forKey: .selectedKoreanVoice) ?? ""
         }
 
-        init(notificationEnabled: Bool, soundEnabled: Bool, voiceEnabled: Bool, maxRecentSessions: Int, reminderEnabled: Bool, reminderInterval: Int, reminderCount: Int, pronunciationRules: [String: String], selectedEnglishVoice: String, selectedKoreanVoice: String) {
+        init(notificationEnabled: Bool, soundEnabled: Bool, voiceEnabled: Bool, maxRecentSessions: Int, pronunciationRules: [String: String], selectedEnglishVoice: String, selectedKoreanVoice: String) {
             self.notificationEnabled = notificationEnabled
             self.soundEnabled = soundEnabled
             self.voiceEnabled = voiceEnabled
             self.maxRecentSessions = maxRecentSessions
-            self.reminderEnabled = reminderEnabled
-            self.reminderInterval = reminderInterval
-            self.reminderCount = reminderCount
             self.pronunciationRules = pronunciationRules
             self.selectedEnglishVoice = selectedEnglishVoice
             self.selectedKoreanVoice = selectedKoreanVoice
@@ -2831,9 +2458,6 @@ class SessionManager {
                 soundEnabled: soundEnabled,
                 voiceEnabled: voiceEnabled,
                 maxRecentSessions: maxRecentSessions,
-                reminderEnabled: reminderEnabled,
-                reminderInterval: reminderInterval,
-                reminderCount: reminderCount,
                 pronunciationRules: pronunciationRules,
                 selectedEnglishVoice: selectedEnglishVoice,
                 selectedKoreanVoice: selectedKoreanVoice
@@ -2855,48 +2479,11 @@ class SessionManager {
             soundEnabled = settings.soundEnabled
             voiceEnabled = settings.voiceEnabled
             maxRecentSessions = settings.maxRecentSessions
-            reminderEnabled = settings.reminderEnabled
-            reminderInterval = settings.reminderInterval
-            reminderCount = settings.reminderCount
             pronunciationRules = settings.pronunciationRules
             selectedEnglishVoice = settings.selectedEnglishVoice
             selectedKoreanVoice = settings.selectedKoreanVoice
         } catch {
             print("Failed to load settings: \(error)")
-        }
-    }
-
-    private func saveSnoozeState() {
-        do {
-            if let snoozedUntil = remindersSnoozedUntil {
-                let data = try JSONEncoder().encode(snoozedUntil)
-                try data.write(to: snoozeURL, options: .atomic)
-            } else {
-                // Remove the file if snooze is cleared
-                try? FileManager.default.removeItem(at: snoozeURL)
-            }
-        } catch {
-            NSLog("Failed to save snooze state: \(error)")
-        }
-    }
-
-    private func loadSnoozeState() {
-        guard FileManager.default.fileExists(atPath: snoozeURL.path) else { return }
-
-        do {
-            let data = try Data(contentsOf: snoozeURL)
-            let snoozedUntil = try JSONDecoder().decode(Date.self, from: data)
-            // Only restore if snooze is still valid (not expired)
-            if snoozedUntil > Date() {
-                // Set backing property directly to avoid triggering save
-                _remindersSnoozedUntil = snoozedUntil
-                NSLog("Restored snooze state until \(snoozedUntil)")
-            } else {
-                // Clean up expired snooze file
-                try? FileManager.default.removeItem(at: snoozeURL)
-            }
-        } catch {
-            NSLog("Failed to load snooze state: \(error)")
         }
     }
 
