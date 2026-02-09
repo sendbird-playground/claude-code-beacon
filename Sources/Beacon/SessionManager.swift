@@ -347,6 +347,7 @@ class SessionManager {
         loadSettings()
         registerNotificationCategories()
         requestNotificationPermission()
+        purgeOrphanedReminderNotifications()
         startHttpServer()
 
         debugLog("SessionManager init complete - voiceEnabled:\(voiceEnabled) soundEnabled:\(soundEnabled)")
@@ -1917,6 +1918,31 @@ class SessionManager {
     }
 
     // MARK: - Notifications
+
+    /// One-time cleanup to remove any leftover reminder notifications from before reminders were removed.
+    /// macOS notification center keeps scheduled notifications even after app uninstall/reinstall.
+    private func purgeOrphanedReminderNotifications() {
+        let semaphore = DispatchSemaphore(value: 0)
+
+        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+            let reminderIds = requests.filter { $0.identifier.contains("-reminder-") }.map { $0.identifier }
+            if !reminderIds.isEmpty {
+                NSLog("Purging \(reminderIds.count) orphaned pending reminder notifications")
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: reminderIds)
+            }
+            semaphore.signal()
+        }
+
+        _ = semaphore.wait(timeout: .now() + 2.0)
+
+        UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
+            let reminderIds = notifications.filter { $0.request.identifier.contains("-reminder-") }.map { $0.request.identifier }
+            if !reminderIds.isEmpty {
+                NSLog("Purging \(reminderIds.count) orphaned delivered reminder notifications")
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: reminderIds)
+            }
+        }
+    }
 
     static let notificationCategoryId = "SESSION_COMPLETED"
 
