@@ -782,10 +782,10 @@ class SessionManager {
                 continue
             }
 
-            // Check if we already have a session for this PID (any status)
-            // Don't create duplicate sessions for the same PID - this prevents
-            // re-notifying when an acknowledged session's process is still running
-            let hasSessionForPid = sessions.contains(where: { $0.pid == process.pid })
+            // Only skip if there's already a RUNNING session for this PID.
+            // Acknowledged/completed sessions should not block new session detection,
+            // since Claude processes are long-running and start new tasks with the same PID.
+            let hasSessionForPid = sessions.contains(where: { $0.pid == process.pid && $0.status == .running })
 
             if !hasSessionForPid {
                 // Truly new PID - create a new session
