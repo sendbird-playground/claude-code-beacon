@@ -9,7 +9,7 @@
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
-    <string>com.beacon.app</string>
+    <string>com.sendbird.Beacon</string>
     <key>CFBundleName</key>
     <string>Beacon</string>
     <key>CFBundlePackageType</key>
