@@ -807,6 +807,7 @@ struct SettingsView: View {
     let sessionManager: SessionManager
     @State private var notificationEnabled: Bool
     @State private var soundEnabled: Bool
+    @State private var soundVolume: Float
     @State private var voiceEnabled: Bool
     @State private var groups: [SessionGroup]
     @State private var showingAddGroup = false
@@ -823,6 +824,7 @@ struct SettingsView: View {
         self.sessionManager = sessionManager
         _notificationEnabled = State(initialValue: sessionManager.notificationEnabled)
         _soundEnabled = State(initialValue: sessionManager.soundEnabled)
+        _soundVolume = State(initialValue: sessionManager.soundVolume)
         _voiceEnabled = State(initialValue: sessionManager.voiceEnabled)
         _groups = State(initialValue: sessionManager.groups)
         _pronunciationRules = State(initialValue: sessionManager.pronunciationRules)
@@ -940,6 +942,20 @@ struct SettingsView: View {
                     .onChange(of: soundEnabled) { new in
                         sessionManager.soundEnabled = new
                     }
+                if soundEnabled {
+                    HStack {
+                        Image(systemName: "speaker.fill")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                        Slider(value: $soundVolume, in: 0...1, step: 0.1)
+                            .onChange(of: soundVolume) { new in
+                                sessionManager.soundVolume = new
+                            }
+                        Image(systemName: "speaker.wave.3.fill")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                }
                 Toggle("Voice", isOn: $voiceEnabled)
                     .onChange(of: voiceEnabled) { new in
                         sessionManager.voiceEnabled = new

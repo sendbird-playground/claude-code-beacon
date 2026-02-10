@@ -156,6 +156,7 @@ struct ClaudeSession: Identifiable, Codable {
     var weztermPane: String?  // WezTerm pane ID
     var ttyName: String?      // TTY name for Terminal.app
     var pycharmWindow: String? // PyCharm window/project name
+    var itermSessionId: String? // iTerm2 session ID for pane navigation
 
     // Per-session settings overrides (nil = use global setting)
     var notificationOverride: Bool?
@@ -190,6 +191,7 @@ struct ClaudeSession: Identifiable, Codable {
         weztermPane: String? = nil,
         ttyName: String? = nil,
         pycharmWindow: String? = nil,
+        itermSessionId: String? = nil,
         notificationOverride: Bool? = nil,
         soundOverride: Bool? = nil,
         voiceOverride: Bool? = nil,
@@ -213,6 +215,7 @@ struct ClaudeSession: Identifiable, Codable {
         self.weztermPane = weztermPane
         self.ttyName = ttyName
         self.pycharmWindow = pycharmWindow
+        self.itermSessionId = itermSessionId
         self.notificationOverride = notificationOverride
         self.soundOverride = soundOverride
         self.voiceOverride = voiceOverride
@@ -240,6 +243,7 @@ struct ClaudeSession: Identifiable, Codable {
         weztermPane = try container.decodeIfPresent(String.self, forKey: .weztermPane)
         ttyName = try container.decodeIfPresent(String.self, forKey: .ttyName)
         pycharmWindow = try container.decodeIfPresent(String.self, forKey: .pycharmWindow)
+        itermSessionId = try container.decodeIfPresent(String.self, forKey: .itermSessionId)
         notificationOverride = try container.decodeIfPresent(Bool.self, forKey: .notificationOverride)
         soundOverride = try container.decodeIfPresent(Bool.self, forKey: .soundOverride)
         voiceOverride = try container.decodeIfPresent(Bool.self, forKey: .voiceOverride)
@@ -287,6 +291,10 @@ class SessionManager {
     }
 
     var soundEnabled: Bool = true {
+        didSet { saveSettings() }
+    }
+
+    var soundVolume: Float = 0.5 {
         didSet { saveSettings() }
     }
 
@@ -349,6 +357,9 @@ class SessionManager {
         requestNotificationPermission()
         purgeOrphanedReminderNotifications()
         startHttpServer()
+
+        // Keep hook script in sync with app version
+        _ = HookManager.shared.installHooks()
 
         debugLog("SessionManager init complete - voiceEnabled:\(voiceEnabled) soundEnabled:\(soundEnabled)")
 
@@ -555,6 +566,7 @@ class SessionManager {
         let weztermPane = json["weztermPane"] as? String
         let ttyName = json["ttyName"] as? String
         let pycharmWindow = json["pycharmWindow"] as? String
+        let itermSessionId = json["itermSessionId"] as? String
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -570,6 +582,7 @@ class SessionManager {
                 self.sessions[index].weztermPane = weztermPane
                 self.sessions[index].ttyName = ttyName
                 self.sessions[index].pycharmWindow = pycharmWindow
+                self.sessions[index].itermSessionId = itermSessionId
                 self.sessions[index].status = .completed
                 self.sessions[index].completedAt = Date()
                 self.sendCompletionNotification(for: self.sessions[index])
@@ -586,7 +599,8 @@ class SessionManager {
                     tag: tag,
                     weztermPane: weztermPane,
                     ttyName: ttyName,
-                    pycharmWindow: pycharmWindow
+                    pycharmWindow: pycharmWindow,
+                    itermSessionId: itermSessionId
                 )
                 self.sessions.insert(session, at: 0)
                 self.sendCompletionNotification(for: session)
@@ -1398,6 +1412,25 @@ class SessionManager {
             } else {
                 activateApp("Terminal")
             }
+            return
+        }
+
+        // Special handling for iTerm2 - use session ID or TTY for pane navigation
+        if appName == "iTerm" || appName == "iTerm2" {
+            var metadata: [String: String] = [:]
+            if let sessionId = session.itermSessionId, !sessionId.isEmpty {
+                metadata["itermSessionId"] = sessionId
+            }
+            let context = SessionContext(
+                id: session.id,
+                projectName: session.projectName,
+                workingDirectory: session.workingDirectory,
+                terminalInfo: session.terminalInfo,
+                pid: session.pid,
+                ttyName: session.ttyName,
+                metadata: metadata
+            )
+            iTerm2Integration.activate(session: context)
             return
         }
 
@@ -2299,6 +2332,7 @@ class SessionManager {
             }
             if let sound = self.alertSound {
                 sound.stop()
+                sound.volume = self.soundVolume
                 let success = sound.play()
                 debugLog("NSSound.play() returned: \(success)")
             } else {
@@ -2448,6 +2482,7 @@ class SessionManager {
     struct BeaconSettings: Codable {
         var notificationEnabled: Bool
         var soundEnabled: Bool
+        var soundVolume: Float
         var voiceEnabled: Bool
         var maxRecentSessions: Int
         var pronunciationRules: [String: String]
@@ -2459,6 +2494,7 @@ class SessionManager {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             notificationEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationEnabled) ?? true
             soundEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? true
+            soundVolume = try container.decodeIfPresent(Float.self, forKey: .soundVolume) ?? 0.5
             voiceEnabled = try container.decodeIfPresent(Bool.self, forKey: .voiceEnabled) ?? true
             maxRecentSessions = try container.decodeIfPresent(Int.self, forKey: .maxRecentSessions) ?? 10
             pronunciationRules = try container.decodeIfPresent([String: String].self, forKey: .pronunciationRules) ?? [:]
@@ -2466,9 +2502,10 @@ class SessionManager {
             selectedKoreanVoice = try container.decodeIfPresent(String.self, forKey: .selectedKoreanVoice) ?? ""
         }
 
-        init(notificationEnabled: Bool, soundEnabled: Bool, voiceEnabled: Bool, maxRecentSessions: Int, pronunciationRules: [String: String], selectedEnglishVoice: String, selectedKoreanVoice: String) {
+        init(notificationEnabled: Bool, soundEnabled: Bool, soundVolume: Float, voiceEnabled: Bool, maxRecentSessions: Int, pronunciationRules: [String: String], selectedEnglishVoice: String, selectedKoreanVoice: String) {
             self.notificationEnabled = notificationEnabled
             self.soundEnabled = soundEnabled
+            self.soundVolume = soundVolume
             self.voiceEnabled = voiceEnabled
             self.maxRecentSessions = maxRecentSessions
             self.pronunciationRules = pronunciationRules
@@ -2482,6 +2519,7 @@ class SessionManager {
             let settings = BeaconSettings(
                 notificationEnabled: notificationEnabled,
                 soundEnabled: soundEnabled,
+                soundVolume: soundVolume,
                 voiceEnabled: voiceEnabled,
                 maxRecentSessions: maxRecentSessions,
                 pronunciationRules: pronunciationRules,
@@ -2503,6 +2541,7 @@ class SessionManager {
             let settings = try JSONDecoder().decode(BeaconSettings.self, from: data)
             notificationEnabled = settings.notificationEnabled
             soundEnabled = settings.soundEnabled
+            soundVolume = settings.soundVolume
             voiceEnabled = settings.voiceEnabled
             maxRecentSessions = settings.maxRecentSessions
             pronunciationRules = settings.pronunciationRules
