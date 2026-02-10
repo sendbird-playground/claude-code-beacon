@@ -965,6 +965,10 @@ struct SettingsView: View {
                             .onChange(of: soundVolume) { new in
                                 sessionManager.soundVolume = new
                             }
+                        Text("\(Int(soundVolume * 100))%")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                            .frame(width: 36, alignment: .trailing)
                     }
                 }
 
