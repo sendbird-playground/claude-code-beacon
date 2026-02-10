@@ -931,6 +931,15 @@ struct SettingsView: View {
 
     // MARK: - General Tab
 
+    private func speakerIcon(for volume: Float) -> String {
+        switch volume {
+        case 0:           return "speaker.slash.fill"
+        case 0.01..<0.34: return "speaker.wave.1.fill"
+        case 0.34..<0.67: return "speaker.wave.2.fill"
+        default:          return "speaker.wave.3.fill"
+        }
+    }
+
     private var generalTab: some View {
         Form {
             Section("Alerts") {
@@ -948,16 +957,14 @@ struct SettingsView: View {
                     }
                 if soundEnabled || voiceEnabled {
                     HStack {
-                        Image(systemName: "speaker.fill")
+                        Image(systemName: speakerIcon(for: soundVolume))
                             .foregroundColor(.secondary)
                             .font(.caption)
+                            .frame(width: 16)
                         Slider(value: $soundVolume, in: 0...1, step: 0.1)
                             .onChange(of: soundVolume) { new in
                                 sessionManager.soundVolume = new
                             }
-                        Image(systemName: "speaker.wave.3.fill")
-                            .foregroundColor(.secondary)
-                            .font(.caption)
                     }
                 }
 
