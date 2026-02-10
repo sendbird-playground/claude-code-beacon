@@ -2,6 +2,8 @@ import Foundation
 import AppKit
 import UserNotifications
 import Network
+import CoreAudio
+import AudioToolbox
 
 // MARK: - Debug Logging
 
@@ -1405,11 +1407,15 @@ class SessionManager {
 
         // Special handling for Terminal.app - use stored TTY if available
         if appName.hasPrefix("Terminal") {
+            debugFileLog("Terminal navigation - ttyName: \(session.ttyName ?? "nil"), pid: \(session.pid.map(String.init) ?? "nil")")
             if let tty = session.ttyName, !tty.isEmpty {
+                debugFileLog("Activating Terminal by TTY: \(tty)")
                 activateTerminalByTty(tty: tty)
             } else if let pid = session.pid {
+                debugFileLog("Activating Terminal by PID: \(pid)")
                 activateTerminalTab(pid: pid, workingDirectory: session.workingDirectory)
             } else {
+                debugFileLog("No TTY or PID, falling back to activateApp(Terminal)")
                 activateApp("Terminal")
             }
             return
@@ -1499,17 +1505,19 @@ class SessionManager {
                         try
                             if tty of t is targetTTY then
                                 set selected of t to true
-                                set frontmost of w to true
-                                return
+                                set index of w to 1
+                                return "found"
                             end if
                         end try
                     end repeat
                 end repeat
+                return "not found"
             end tell
             """
         var error: NSDictionary?
         if let appleScript = NSAppleScript(source: script) {
-            appleScript.executeAndReturnError(&error)
+            let result = appleScript.executeAndReturnError(&error)
+            debugFileLog("activateTerminalByTty result: \(result.stringValue ?? "nil"), error: \(error ?? [:])")
         }
     }
 
@@ -1582,6 +1590,7 @@ class SessionManager {
             """
         var ttyError: NSDictionary?
         let tty = NSAppleScript(source: ttyScript)?.executeAndReturnError(&ttyError).stringValue ?? ""
+        debugFileLog("activateTerminalTab: pid=\(pid), resolved tty='\(tty)'")
 
         // Activate Terminal tab by TTY
         let script = """
@@ -1594,7 +1603,7 @@ class SessionManager {
                             try
                                 if tty of t is targetTTY then
                                     set selected of t to true
-                                    set frontmost of w to true
+                                    set index of w to 1
                                     return "found"
                                 end if
                             end try
@@ -1606,7 +1615,8 @@ class SessionManager {
 
         var error: NSDictionary?
         if let appleScript = NSAppleScript(source: script) {
-            appleScript.executeAndReturnError(&error)
+            let result = appleScript.executeAndReturnError(&error)
+            debugFileLog("activateTerminalTab result: \(result.stringValue ?? "nil"), error: \(error ?? [:])")
         }
     }
 
@@ -1954,25 +1964,27 @@ class SessionManager {
 
     /// One-time cleanup to remove any leftover reminder notifications from before reminders were removed.
     /// macOS notification center keeps scheduled notifications even after app uninstall/reinstall.
+    /// Uses async dispatch to avoid deadlocking the main thread during init.
     private func purgeOrphanedReminderNotifications() {
-        let semaphore = DispatchSemaphore(value: 0)
+        let center = UNUserNotificationCenter.current()
 
-        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+        center.getPendingNotificationRequests { requests in
             let reminderIds = requests.filter { $0.identifier.contains("-reminder-") }.map { $0.identifier }
             if !reminderIds.isEmpty {
                 NSLog("Purging \(reminderIds.count) orphaned pending reminder notifications")
-                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: reminderIds)
+                center.removePendingNotificationRequests(withIdentifiers: reminderIds)
+            } else {
+                NSLog("No orphaned pending reminder notifications found")
             }
-            semaphore.signal()
         }
 
-        _ = semaphore.wait(timeout: .now() + 2.0)
-
-        UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
+        center.getDeliveredNotifications { notifications in
             let reminderIds = notifications.filter { $0.request.identifier.contains("-reminder-") }.map { $0.request.identifier }
             if !reminderIds.isEmpty {
                 NSLog("Purging \(reminderIds.count) orphaned delivered reminder notifications")
-                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: reminderIds)
+                center.removeDeliveredNotifications(withIdentifiers: reminderIds)
+            } else {
+                NSLog("No orphaned delivered reminder notifications found")
             }
         }
     }
@@ -2289,9 +2301,11 @@ class SessionManager {
                 synth = s
             }
 
-            synth.volume = self.soundVolume
-            let success = synth.startSpeaking(textToSpeak)
-            debugLog("startSpeaking returned: \(success) for text: '\(textToSpeak)' (korean=\(useKorean))")
+            self.withAbsoluteVolume(duration: 5.0) { adjustedVolume in
+                synth.volume = adjustedVolume
+                let success = synth.startSpeaking(textToSpeak)
+                debugLog("startSpeaking returned: \(success) for text: '\(textToSpeak)' (korean=\(useKorean)), adjustedVolume: \(adjustedVolume)")
+            }
         }
     }
 
@@ -2317,6 +2331,73 @@ class SessionManager {
     }
 
     private var alertSound: NSSound?
+    private var savedSystemVolume: Float?
+
+    // MARK: - System Volume (CoreAudio)
+
+    private func getDefaultOutputDeviceID() -> AudioDeviceID? {
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout.size(ofValue: deviceID))
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
+        return status == noErr ? deviceID : nil
+    }
+
+    private func getSystemVolume() -> Float? {
+        guard let deviceID = getDefaultOutputDeviceID() else { return nil }
+        var volume = Float32(0)
+        var size = UInt32(MemoryLayout.size(ofValue: volume))
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &volume)
+        return status == noErr ? volume : nil
+    }
+
+    private func setSystemVolume(_ volume: Float) {
+        guard let deviceID = getDefaultOutputDeviceID() else { return }
+        var vol = Float32(max(0, min(1, volume)))
+        let size = UInt32(MemoryLayout.size(ofValue: vol))
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectSetPropertyData(deviceID, &address, 0, nil, size, &vol)
+    }
+
+    /// Play sound/voice at absolute volume independent of system volume.
+    /// Temporarily adjusts system volume if needed, then restores it.
+    private func withAbsoluteVolume(duration: TimeInterval = 1.5, action: @escaping (_ adjustedVolume: Float) -> Void) {
+        let desired = self.soundVolume
+        let systemVol = getSystemVolume() ?? 1.0
+        debugLog("withAbsoluteVolume: desired=\(desired), systemVol=\(systemVol)")
+
+        if systemVol <= 0.001 {
+            // System is muted, temporarily set to desired volume
+            setSystemVolume(desired)
+            action(1.0)
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+                self?.setSystemVolume(0)
+            }
+        } else if systemVol >= desired {
+            // System volume is high enough, just scale down
+            action(desired / systemVol)
+        } else {
+            // System volume is too low, boost it temporarily
+            setSystemVolume(desired)
+            action(1.0)
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+                self?.setSystemVolume(systemVol)
+            }
+        }
+    }
 
     func playAlertSound() {
         debugLog("playAlertSound called")
@@ -2333,9 +2414,11 @@ class SessionManager {
             }
             if let sound = self.alertSound {
                 sound.stop()
-                sound.volume = self.soundVolume
-                let success = sound.play()
-                debugLog("NSSound.play() returned: \(success)")
+                self.withAbsoluteVolume(duration: 1.5) { adjustedVolume in
+                    sound.volume = adjustedVolume
+                    let success = sound.play()
+                    debugLog("NSSound.play() returned: \(success), adjustedVolume: \(adjustedVolume)")
+                }
             } else {
                 debugLog("ERROR: Failed to load Glass sound")
             }
@@ -2367,9 +2450,11 @@ class SessionManager {
 
             let testText = "Task completed"
             debugLog("Speaking test: \(testText)")
-            self.englishSynthesizer?.volume = self.soundVolume
-            let success = self.englishSynthesizer?.startSpeaking(testText) ?? false
-            debugLog("testVoice startSpeaking returned: \(success)")
+            self.withAbsoluteVolume(duration: 3.0) { [weak self] adjustedVolume in
+                self?.englishSynthesizer?.volume = adjustedVolume
+                let success = self?.englishSynthesizer?.startSpeaking(testText) ?? false
+                debugLog("testVoice startSpeaking returned: \(success), adjustedVolume: \(adjustedVolume)")
+            }
         }
     }
 
