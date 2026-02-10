@@ -942,7 +942,11 @@ struct SettingsView: View {
                     .onChange(of: soundEnabled) { new in
                         sessionManager.soundEnabled = new
                     }
-                if soundEnabled {
+                Toggle("Voice", isOn: $voiceEnabled)
+                    .onChange(of: voiceEnabled) { new in
+                        sessionManager.voiceEnabled = new
+                    }
+                if soundEnabled || voiceEnabled {
                     HStack {
                         Image(systemName: "speaker.fill")
                             .foregroundColor(.secondary)
@@ -956,10 +960,6 @@ struct SettingsView: View {
                             .font(.caption)
                     }
                 }
-                Toggle("Voice", isOn: $voiceEnabled)
-                    .onChange(of: voiceEnabled) { new in
-                        sessionManager.voiceEnabled = new
-                    }
 
                 Button("Test Alerts") {
                     sessionManager.testAlerts()
