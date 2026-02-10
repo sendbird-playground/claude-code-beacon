@@ -1968,23 +1968,20 @@ class SessionManager {
     private func purgeOrphanedReminderNotifications() {
         let center = UNUserNotificationCenter.current()
 
-        center.getPendingNotificationRequests { requests in
-            let reminderIds = requests.filter { $0.identifier.contains("-reminder-") }.map { $0.identifier }
-            if !reminderIds.isEmpty {
-                NSLog("Purging \(reminderIds.count) orphaned pending reminder notifications")
-                center.removePendingNotificationRequests(withIdentifiers: reminderIds)
-            } else {
-                NSLog("No orphaned pending reminder notifications found")
-            }
-        }
+        // Nuclear purge: remove ALL pending notifications to kill any repeating reminders.
+        // Valid completion notifications use a 0.1s one-shot trigger so none will be pending.
+        center.removeAllPendingNotificationRequests()
+        NSLog("Purged all pending notifications to remove orphaned reminders")
 
+        // Also remove delivered reminder notifications
         center.getDeliveredNotifications { notifications in
-            let reminderIds = notifications.filter { $0.request.identifier.contains("-reminder-") }.map { $0.request.identifier }
+            let reminderIds = notifications.filter {
+                $0.request.identifier.contains("-reminder-") ||
+                $0.request.content.title.contains("Reminder")
+            }.map { $0.request.identifier }
             if !reminderIds.isEmpty {
                 NSLog("Purging \(reminderIds.count) orphaned delivered reminder notifications")
                 center.removeDeliveredNotifications(withIdentifiers: reminderIds)
-            } else {
-                NSLog("No orphaned delivered reminder notifications found")
             }
         }
     }
