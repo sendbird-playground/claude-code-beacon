@@ -2289,6 +2289,7 @@ class SessionManager {
                 synth = s
             }
 
+            synth.volume = self.soundVolume
             let success = synth.startSpeaking(textToSpeak)
             debugLog("startSpeaking returned: \(success) for text: '\(textToSpeak)' (korean=\(useKorean))")
         }
@@ -2366,6 +2367,7 @@ class SessionManager {
 
             let testText = "Task completed"
             debugLog("Speaking test: \(testText)")
+            self.englishSynthesizer?.volume = self.soundVolume
             let success = self.englishSynthesizer?.startSpeaking(testText) ?? false
             debugLog("testVoice startSpeaking returned: \(success)")
         }
