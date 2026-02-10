@@ -257,6 +257,26 @@ class HookManager {
             }
         }
 
+        // Remove SubagentStop hook to prevent double alerts (Stop already covers it)
+        if var subagentStopHooks = hooks["SubagentStop"] as? [[String: Any]] {
+            subagentStopHooks.removeAll { entry in
+                if let innerHooks = entry["hooks"] as? [[String: Any]] {
+                    return innerHooks.contains { hook in
+                        if let command = hook["command"] as? String {
+                            return command.contains("task-complete-alert.sh")
+                        }
+                        return false
+                    }
+                }
+                return false
+            }
+            if subagentStopHooks.isEmpty {
+                hooks.removeValue(forKey: "SubagentStop")
+            } else {
+                hooks["SubagentStop"] = subagentStopHooks
+            }
+        }
+
         // Get or create Stop hook array
         var stopHooks = hooks["Stop"] as? [[String: Any]] ?? []
 
@@ -284,15 +304,16 @@ class HookManager {
             ]
             stopHooks.append(newHook)
             hooks["Stop"] = stopHooks
-            settings["hooks"] = hooks
+        }
 
-            // Write back
-            do {
-                let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
-                try data.write(to: settingsFile, options: .atomic)
-            } catch {
-                return (false, "Failed to update settings.json: \(error.localizedDescription)")
-            }
+        settings["hooks"] = hooks
+
+        // Always write back to persist any cleanup or additions
+        do {
+            let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: settingsFile, options: .atomic)
+        } catch {
+            return (false, "Failed to update settings.json: \(error.localizedDescription)")
         }
 
         return (true, "Hook added to settings.json")
