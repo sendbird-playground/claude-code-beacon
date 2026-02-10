@@ -24,11 +24,16 @@ class HookManager {
             let data = try Data(contentsOf: settingsFile)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let hooks = json["hooks"] as? [String: Any],
-               let postToolCall = hooks["PostToolUse"] as? [[String: Any]] {
-                // Check if our hook is present
-                return postToolCall.contains { hook in
-                    if let command = hook["command"] as? String {
-                        return command.contains("task-complete-alert.sh")
+               let stopHooks = hooks["Stop"] as? [[String: Any]] {
+                // Check if our hook is present in Stop event
+                return stopHooks.contains { entry in
+                    if let innerHooks = entry["hooks"] as? [[String: Any]] {
+                        return innerHooks.contains { hook in
+                            if let command = hook["command"] as? String {
+                                return command.contains("task-complete-alert.sh")
+                            }
+                            return false
+                        }
                     }
                     return false
                 }
@@ -178,6 +183,7 @@ class HookManager {
         wezterm_pane=""
         tty_name=""
         pycharm_window=""
+        iterm_session_id=""
 
         # Get TTY for any terminal
         tty_name=$(tty 2>/dev/null | sed 's|/dev/||' || echo "")
@@ -189,6 +195,7 @@ class HookManager {
         elif [[ -n "$ITERM_SESSION_ID" ]]; then
             app_name="iTerm"
             tab_info="iTerm"
+            iterm_session_id="$ITERM_SESSION_ID"
         elif [[ "$TERM_PROGRAM" == "vscode" ]] || [[ -n "$VSCODE_INJECTION" ]]; then
             app_name="Cursor"
             tab_info="Cursor"
@@ -210,7 +217,7 @@ class HookManager {
         escaped_details=$(echo "$task_details" | sed 's/"/\\\\"/g')
         curl -s -X POST "http://localhost:${BEACON_PORT}" \\
             -H "Content-Type: application/json" \\
-            -d "{\\"id\\":\\"${SESSION_ID}\\",\\"projectName\\":\\"${project_identifier}\\",\\"terminalInfo\\":\\"${tab_info}\\",\\"workingDirectory\\":\\"${cwd}\\",\\"summary\\":\\"${task_summary}\\",\\"details\\":\\"${escaped_details}\\",\\"tag\\":\\"${session_tag}\\",\\"weztermPane\\":\\"${wezterm_pane}\\",\\"ttyName\\":\\"${tty_name}\\",\\"pycharmWindow\\":\\"${pycharm_window}\\"}" \\
+            -d "{\\"id\\":\\"${SESSION_ID}\\",\\"projectName\\":\\"${project_identifier}\\",\\"terminalInfo\\":\\"${tab_info}\\",\\"workingDirectory\\":\\"${cwd}\\",\\"summary\\":\\"${task_summary}\\",\\"details\\":\\"${escaped_details}\\",\\"tag\\":\\"${session_tag}\\",\\"weztermPane\\":\\"${wezterm_pane}\\",\\"ttyName\\":\\"${tty_name}\\",\\"pycharmWindow\\":\\"${pycharm_window}\\",\\"itermSessionId\\":\\"${iterm_session_id}\\"}" \\
             --connect-timeout 1 2>/dev/null &
         """
     }
@@ -235,25 +242,48 @@ class HookManager {
         // Get or create hooks section
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
 
-        // Get or create PostToolUse array
-        var postToolUse = hooks["PostToolUse"] as? [[String: Any]] ?? []
+        // Remove legacy PostToolUse hook if present
+        if var postToolUse = hooks["PostToolUse"] as? [[String: Any]] {
+            postToolUse.removeAll { hook in
+                if let command = hook["command"] as? String {
+                    return command.contains("task-complete-alert.sh")
+                }
+                return false
+            }
+            if postToolUse.isEmpty {
+                hooks.removeValue(forKey: "PostToolUse")
+            } else {
+                hooks["PostToolUse"] = postToolUse
+            }
+        }
+
+        // Get or create Stop hook array
+        var stopHooks = hooks["Stop"] as? [[String: Any]] ?? []
 
         // Check if our hook already exists
-        let hookExists = postToolUse.contains { hook in
-            if let command = hook["command"] as? String {
-                return command.contains("task-complete-alert.sh")
+        let hookExists = stopHooks.contains { entry in
+            if let innerHooks = entry["hooks"] as? [[String: Any]] {
+                return innerHooks.contains { hook in
+                    if let command = hook["command"] as? String {
+                        return command.contains("task-complete-alert.sh")
+                    }
+                    return false
+                }
             }
             return false
         }
 
         if !hookExists {
-            // Add our hook
+            // Add our hook using the Stop event format
             let newHook: [String: Any] = [
-                "matcher": "Stop",
-                "command": "~/.claude/task-complete-alert.sh"
+                "hooks": [[
+                    "type": "command",
+                    "command": "~/.claude/task-complete-alert.sh",
+                    "timeout": 10
+                ] as [String: Any]]
             ]
-            postToolUse.append(newHook)
-            hooks["PostToolUse"] = postToolUse
+            stopHooks.append(newHook)
+            hooks["Stop"] = stopHooks
             settings["hooks"] = hooks
 
             // Write back
@@ -283,19 +313,41 @@ class HookManager {
                 return (true, "No hooks configured")
             }
 
-            guard var postToolUse = hooks["PostToolUse"] as? [[String: Any]] else {
-                return (true, "No PostToolUse hooks")
-            }
-
-            // Remove our hook
-            postToolUse.removeAll { hook in
-                if let command = hook["command"] as? String {
-                    return command.contains("task-complete-alert.sh")
+            // Remove from Stop hooks
+            if var stopHooks = hooks["Stop"] as? [[String: Any]] {
+                stopHooks.removeAll { entry in
+                    if let innerHooks = entry["hooks"] as? [[String: Any]] {
+                        return innerHooks.contains { hook in
+                            if let command = hook["command"] as? String {
+                                return command.contains("task-complete-alert.sh")
+                            }
+                            return false
+                        }
+                    }
+                    return false
                 }
-                return false
+                if stopHooks.isEmpty {
+                    hooks.removeValue(forKey: "Stop")
+                } else {
+                    hooks["Stop"] = stopHooks
+                }
             }
 
-            hooks["PostToolUse"] = postToolUse
+            // Also remove legacy PostToolUse hook if present
+            if var postToolUse = hooks["PostToolUse"] as? [[String: Any]] {
+                postToolUse.removeAll { hook in
+                    if let command = hook["command"] as? String {
+                        return command.contains("task-complete-alert.sh")
+                    }
+                    return false
+                }
+                if postToolUse.isEmpty {
+                    hooks.removeValue(forKey: "PostToolUse")
+                } else {
+                    hooks["PostToolUse"] = postToolUse
+                }
+            }
+
             settings["hooks"] = hooks
 
             // Write back
