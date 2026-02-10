@@ -356,7 +356,6 @@ class SessionManager {
         loadGroups()
         loadSettings()
         registerNotificationCategories()
-        requestNotificationPermission()
         purgeOrphanedReminderNotifications()
         startHttpServer()
 
@@ -614,43 +613,15 @@ class SessionManager {
         }
     }
 
-    private func requestNotificationPermission() {
+    func requestNotificationPermission() {
         let center = UNUserNotificationCenter.current()
-
-        // Check current authorization status first
-        center.getNotificationSettings { settings in
-            NSLog("Notification authorization status: \(settings.authorizationStatus.rawValue)")
-            NSLog("Alert setting: \(settings.alertSetting.rawValue)")
-            NSLog("Sound setting: \(settings.soundSetting.rawValue)")
-            NSLog("Badge setting: \(settings.badgeSetting.rawValue)")
-
-            switch settings.authorizationStatus {
-            case .notDetermined:
-                // Request provisional authorization first (doesn't require user interaction)
-                // This helps the app appear in System Settings > Notifications
-                // Then request full authorization which may show a dialog
-                center.requestAuthorization(options: [.alert, .sound, .badge, .provisional]) { granted, error in
-                    NSLog("Notification permission granted: \(granted)")
-                    if let error = error {
-                        NSLog("Notification permission error: \(error)")
-                    }
-
-                    // If provisional granted, also request full authorization
-                    if granted {
-                        center.requestAuthorization(options: [.alert, .sound, .badge]) { fullGranted, fullError in
-                            NSLog("Full notification permission granted: \(fullGranted)")
-                            if let fullError = fullError {
-                                NSLog("Full notification permission error: \(fullError)")
-                            }
-                        }
-                    }
-                }
-            case .denied:
-                NSLog("Notifications are denied. Please enable in System Settings > Notifications > Beacon")
-            case .authorized, .provisional, .ephemeral:
-                NSLog("Notifications are authorized")
-            @unknown default:
-                break
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            NSLog("Notification permission granted: \(granted)")
+            if let error = error {
+                NSLog("Notification permission error: \(error)")
+            }
+            if !granted {
+                NSLog("Notifications denied. Enable in System Settings > Notifications > Beacon")
             }
         }
     }

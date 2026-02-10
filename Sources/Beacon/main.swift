@@ -1417,6 +1417,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Initialize session manager
         sessionManager = SessionManager.shared
 
+        // Request notification permission after run loop is active
+        sessionManager.requestNotificationPermission()
+
         // Setup view model
         viewModel = SessionsViewModel()
         viewModel.appDelegate = self
