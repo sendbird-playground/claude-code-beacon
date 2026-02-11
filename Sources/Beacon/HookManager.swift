@@ -196,18 +196,7 @@ class HookManager {
             tty_name=$(ps -p $grandparent -o tty= 2>/dev/null | tr -d ' ')
         fi
 
-        if [[ -n "$WEZTERM_PANE" ]]; then
-            app_name="WezTerm"
-            tab_info="WezTerm"
-            wezterm_pane="$WEZTERM_PANE"
-        elif [[ -n "$ITERM_SESSION_ID" ]]; then
-            app_name="iTerm"
-            tab_info="iTerm"
-            iterm_session_id="$ITERM_SESSION_ID"
-        elif [[ "$TERM_PROGRAM" == "vscode" ]] || [[ -n "$VSCODE_INJECTION" ]]; then
-            app_name="Cursor"
-            tab_info="Cursor"
-        elif [[ -n "$TERMINAL_EMULATOR" ]] && [[ "$TERMINAL_EMULATOR" == *"JetBrains"* ]]; then
+        if [[ -n "$TERMINAL_EMULATOR" ]] && [[ "$TERMINAL_EMULATOR" == *"JetBrains"* ]]; then
             app_name="PyCharm"
             tab_info="PyCharm"
             # Query Beacon plugin for active terminal tab (reliable, works with custom tab names)
@@ -224,6 +213,17 @@ class HookManager {
             if [[ -z "$pycharm_window" ]]; then
                 pycharm_window=$(osascript -e 'tell application "System Events" to tell process "pycharm" to get name of front window' 2>/dev/null | cut -d' ' -f1 || echo "")
             fi
+        elif [[ -n "$WEZTERM_PANE" ]]; then
+            app_name="WezTerm"
+            tab_info="WezTerm"
+            wezterm_pane="$WEZTERM_PANE"
+        elif [[ -n "$ITERM_SESSION_ID" ]]; then
+            app_name="iTerm"
+            tab_info="iTerm"
+            iterm_session_id="$ITERM_SESSION_ID"
+        elif [[ "$TERM_PROGRAM" == "vscode" ]] || [[ -n "$VSCODE_INJECTION" ]]; then
+            app_name="Cursor"
+            tab_info="Cursor"
         elif [[ "$TERM_PROGRAM" == "Apple_Terminal" ]] || [[ -z "$TERM_PROGRAM" ]]; then
             app_name="Terminal"
             tab_info="Terminal"
