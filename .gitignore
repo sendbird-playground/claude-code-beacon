@@ -14,3 +14,11 @@ Beacon.app/
 
 # macOS
 .DS_Store
+
+# Secrets / signing keys
+*.pem
+*.crt
+*.p12
+*.keystore
+.env
+.env.*

@@ -1,6 +1,6 @@
 # Beacon
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -13,17 +13,13 @@ A macOS menu bar app that monitors Claude Code sessions and notifies you when ta
 - **Task Completion Alerts**: Notification, sound, and voice alerts (individually toggleable)
 - **Quick Navigation**: Click to jump directly to the terminal/IDE where the task completed
 - **Multi-App Support**: Works with WezTerm, iTerm2, Terminal.app, VS Code, Cursor, PyCharm, and more
+- **PyCharm Plugin**: Optional JetBrains plugin for reliable terminal tab navigation (no AX permissions needed)
 
 ### Session Management
 - **Session Groups**: Organize sessions into color-coded groups
 - **Drag & Drop**: Reorder sessions within groups or move between groups
-- **Per-Session Settings**: Override notification, sound, voice, and reminder settings per session
+- **Per-Session Settings**: Override notification, sound, and voice settings per session
 - **Per-Group Settings**: Set default overrides for all sessions in a group
-
-### Reminders
-- **Configurable Reminders**: Get reminded about unacknowledged tasks at 1, 2, 5, or 10 minute intervals
-- **Reminder Count**: Set 1-5 reminders or infinite until acknowledged
-- **Click to Dismiss**: Clicking a notification acknowledges the task and stops reminders
 
 ### Voice
 - **Text-to-Speech**: Speaks the project name when a task completes
@@ -62,11 +58,6 @@ Access via **⚙️** gear icon in the popover header:
 - **Voice** - Speaks project name aloud
 - **Test buttons** - Test sound and voice
 
-### Reminders
-- **Enabled** - Toggle reminder notifications
-- **Interval** - 1, 2, 5, or 10 minutes between reminders
-- **Count** - Number of reminders (1-5 or infinite)
-
 ### Groups
 - Create groups with custom names and colors
 - Double-click to edit group name inline
@@ -82,6 +73,16 @@ Access via **⚙️** gear icon in the popover header:
 - Automatically checks GitHub releases hourly for updates
 - Shows notification when new version is available
 - One-click to view release page and download
+
+### PyCharm Plugin (optional)
+
+For reliable terminal tab navigation in PyCharm/JetBrains IDEs, install the companion plugin:
+
+1. Build: `cd plugins/beacon-terminal-navigator && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew buildPlugin`
+2. Install: PyCharm → Settings → Plugins → ⚙ → Install from Disk → select `build/distributions/beacon-terminal-navigator-1.0.0.zip`
+3. Restart PyCharm
+
+The plugin runs a local HTTP server on `127.0.0.1:19877`. Beacon auto-detects it and uses native IDE APIs to switch terminal tabs.
 
 ## Start at Login
 

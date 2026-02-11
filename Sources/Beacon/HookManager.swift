@@ -183,10 +183,18 @@ class HookManager {
         wezterm_pane=""
         tty_name=""
         pycharm_window=""
+        pycharm_tab_name=""
         iterm_session_id=""
 
-        # Get TTY for any terminal
+        # Get TTY for any terminal (use ps to resolve from parent process since hooks lack a controlling tty)
         tty_name=$(tty 2>/dev/null | sed 's|/dev/||' || echo "")
+        if [[ -z "$tty_name" || "$tty_name" == "not a tty" ]]; then
+            tty_name=$(ps -p $PPID -o tty= 2>/dev/null | tr -d ' ')
+        fi
+        if [[ -z "$tty_name" || "$tty_name" == "??" ]]; then
+            grandparent=$(ps -p $PPID -o ppid= 2>/dev/null | tr -d ' ')
+            tty_name=$(ps -p $grandparent -o tty= 2>/dev/null | tr -d ' ')
+        fi
 
         if [[ -n "$WEZTERM_PANE" ]]; then
             app_name="WezTerm"
@@ -202,8 +210,20 @@ class HookManager {
         elif [[ -n "$TERMINAL_EMULATOR" ]] && [[ "$TERMINAL_EMULATOR" == *"JetBrains"* ]]; then
             app_name="PyCharm"
             tab_info="PyCharm"
-            # Get PyCharm front window name to identify project
-            pycharm_window=$(osascript -e 'tell application "System Events" to tell process "pycharm" to get name of front window' 2>/dev/null | cut -d' ' -f1 || echo "")
+            # Query Beacon plugin for active terminal tab (reliable, works with custom tab names)
+            plugin_response=$(curl -s --connect-timeout 1 --max-time 2 http://127.0.0.1:19877/active-terminal 2>/dev/null || echo "")
+            if [[ -n "$plugin_response" && "$plugin_response" != "[]" ]]; then
+                # Match project by cwd — plugin returns basePath for each project
+                plugin_match=$(echo "$plugin_response" | python3 -c "import sys,json;[print(p['project']+'\\\\t'+p['tabName']) for p in json.load(sys.stdin) if '$cwd'.startswith(p.get('basePath','/'))][:1]" 2>/dev/null | head -1)
+                if [[ -n "$plugin_match" ]]; then
+                    pycharm_window=$(echo "$plugin_match" | cut -f1)
+                    pycharm_tab_name=$(echo "$plugin_match" | cut -f2)
+                fi
+            fi
+            # Fallback: get window name via osascript if plugin not available
+            if [[ -z "$pycharm_window" ]]; then
+                pycharm_window=$(osascript -e 'tell application "System Events" to tell process "pycharm" to get name of front window' 2>/dev/null | cut -d' ' -f1 || echo "")
+            fi
         elif [[ "$TERM_PROGRAM" == "Apple_Terminal" ]] || [[ -z "$TERM_PROGRAM" ]]; then
             app_name="Terminal"
             tab_info="Terminal"
@@ -217,7 +237,7 @@ class HookManager {
         escaped_details=$(echo "$task_details" | sed 's/"/\\\\"/g')
         curl -s -X POST "http://localhost:${BEACON_PORT}" \\
             -H "Content-Type: application/json" \\
-            -d "{\\"id\\":\\"${SESSION_ID}\\",\\"projectName\\":\\"${project_identifier}\\",\\"terminalInfo\\":\\"${tab_info}\\",\\"workingDirectory\\":\\"${cwd}\\",\\"summary\\":\\"${task_summary}\\",\\"details\\":\\"${escaped_details}\\",\\"tag\\":\\"${session_tag}\\",\\"weztermPane\\":\\"${wezterm_pane}\\",\\"ttyName\\":\\"${tty_name}\\",\\"pycharmWindow\\":\\"${pycharm_window}\\",\\"itermSessionId\\":\\"${iterm_session_id}\\"}" \\
+            -d "{\\"id\\":\\"${SESSION_ID}\\",\\"projectName\\":\\"${project_identifier}\\",\\"terminalInfo\\":\\"${tab_info}\\",\\"workingDirectory\\":\\"${cwd}\\",\\"summary\\":\\"${task_summary}\\",\\"details\\":\\"${escaped_details}\\",\\"tag\\":\\"${session_tag}\\",\\"weztermPane\\":\\"${wezterm_pane}\\",\\"ttyName\\":\\"${tty_name}\\",\\"pycharmWindow\\":\\"${pycharm_window}\\",\\"pycharmTabName\\":\\"${pycharm_tab_name}\\",\\"itermSessionId\\":\\"${iterm_session_id}\\"}" \\
             --connect-timeout 1 2>/dev/null &
         """
     }

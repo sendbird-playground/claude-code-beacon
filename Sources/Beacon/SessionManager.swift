@@ -2,8 +2,6 @@ import Foundation
 import AppKit
 import UserNotifications
 import Network
-import CoreAudio
-import AudioToolbox
 
 // MARK: - Debug Logging
 
@@ -158,6 +156,7 @@ struct ClaudeSession: Identifiable, Codable {
     var weztermPane: String?  // WezTerm pane ID
     var ttyName: String?      // TTY name for Terminal.app
     var pycharmWindow: String? // PyCharm window/project name
+    var pycharmTabName: String? // PyCharm terminal tab name (e.g., "로컬 (2)")
     var itermSessionId: String? // iTerm2 session ID for pane navigation
 
     // Per-session settings overrides (nil = use global setting)
@@ -193,6 +192,7 @@ struct ClaudeSession: Identifiable, Codable {
         weztermPane: String? = nil,
         ttyName: String? = nil,
         pycharmWindow: String? = nil,
+        pycharmTabName: String? = nil,
         itermSessionId: String? = nil,
         notificationOverride: Bool? = nil,
         soundOverride: Bool? = nil,
@@ -217,6 +217,7 @@ struct ClaudeSession: Identifiable, Codable {
         self.weztermPane = weztermPane
         self.ttyName = ttyName
         self.pycharmWindow = pycharmWindow
+        self.pycharmTabName = pycharmTabName
         self.itermSessionId = itermSessionId
         self.notificationOverride = notificationOverride
         self.soundOverride = soundOverride
@@ -245,6 +246,7 @@ struct ClaudeSession: Identifiable, Codable {
         weztermPane = try container.decodeIfPresent(String.self, forKey: .weztermPane)
         ttyName = try container.decodeIfPresent(String.self, forKey: .ttyName)
         pycharmWindow = try container.decodeIfPresent(String.self, forKey: .pycharmWindow)
+        pycharmTabName = try container.decodeIfPresent(String.self, forKey: .pycharmTabName)
         itermSessionId = try container.decodeIfPresent(String.self, forKey: .itermSessionId)
         notificationOverride = try container.decodeIfPresent(Bool.self, forKey: .notificationOverride)
         soundOverride = try container.decodeIfPresent(Bool.self, forKey: .soundOverride)
@@ -565,24 +567,52 @@ class SessionManager {
         let details = json["details"] as? String
         let tag = json["tag"] as? String
         let weztermPane = json["weztermPane"] as? String
-        let ttyName = json["ttyName"] as? String
+        var ttyName = json["ttyName"] as? String
         let pycharmWindow = json["pycharmWindow"] as? String
+        let pycharmTabName = json["pycharmTabName"] as? String
         let itermSessionId = json["itermSessionId"] as? String
+
+        // Validate TTY - re-resolve from PID if invalid
+        if let tty = ttyName, (tty.isEmpty || tty == "??" || tty.contains("not a tty")) {
+            ttyName = nil
+        }
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            // Find existing running session with same working directory or create new completed session
-            if let index = self.sessions.firstIndex(where: {
-                $0.workingDirectory == workingDirectory && $0.status == .running
-            }) {
+            // Find existing running session - prefer TTY match, fall back to working directory
+            let index: Int?
+            if let validTty = ttyName {
+                // Match by TTY first (most precise - handles multiple sessions in same directory)
+                index = self.sessions.firstIndex(where: {
+                    $0.status == .running && $0.ttyName == validTty
+                }) ?? self.sessions.firstIndex(where: {
+                    $0.status == .running && $0.workingDirectory == workingDirectory
+                })
+            } else {
+                index = self.sessions.firstIndex(where: {
+                    $0.status == .running && $0.workingDirectory == workingDirectory
+                })
+            }
+
+            if let index = index {
                 // Update existing session with hook data and mark completed
                 self.sessions[index].summary = summary
                 self.sessions[index].details = details
                 self.sessions[index].tag = tag
                 self.sessions[index].weztermPane = weztermPane
-                self.sessions[index].ttyName = ttyName
+                // Only update ttyName if hook provides a valid one; keep existing if hook's is nil
+                if let validTty = ttyName {
+                    self.sessions[index].ttyName = validTty
+                } else if let existingTty = self.sessions[index].ttyName,
+                          (existingTty.isEmpty || existingTty == "??" || existingTty.contains("not a tty")) {
+                    // Existing TTY is also invalid - try re-resolving from PID
+                    if let pid = self.sessions[index].pid {
+                        self.sessions[index].ttyName = self.getProcessTty(pid: pid)
+                    }
+                }
                 self.sessions[index].pycharmWindow = pycharmWindow
+                self.sessions[index].pycharmTabName = pycharmTabName
                 self.sessions[index].itermSessionId = itermSessionId
                 self.sessions[index].status = .completed
                 self.sessions[index].completedAt = Date()
@@ -601,6 +631,7 @@ class SessionManager {
                     weztermPane: weztermPane,
                     ttyName: ttyName,
                     pycharmWindow: pycharmWindow,
+                    pycharmTabName: pycharmTabName,
                     itermSessionId: itermSessionId
                 )
                 self.sessions.insert(session, at: 0)
@@ -784,6 +815,17 @@ class SessionManager {
             // Acknowledged/completed sessions should not block new session detection,
             // since Claude processes are long-running and start new tasks with the same PID.
             let hasSessionForPid = sessions.contains(where: { $0.pid == process.pid && $0.status == .running })
+
+            // Fix stale TTY on existing running sessions for this PID
+            if hasSessionForPid, let validTty = process.ttyName, !validTty.isEmpty, validTty != "??", !validTty.contains("not a tty") {
+                for i in sessions.indices where sessions[i].pid == process.pid && sessions[i].status == .running {
+                    if let existingTty = sessions[i].ttyName,
+                       (existingTty.isEmpty || existingTty == "??" || existingTty.contains("not a tty")) {
+                        sessions[i].ttyName = validTty
+                        needsUIUpdate = true
+                    }
+                }
+            }
 
             if !hasSessionForPid {
                 // Truly new PID - create a new session
@@ -1099,7 +1141,7 @@ class SessionManager {
             task.waitUntilExit()
 
             let tty = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !tty.isEmpty && tty != "??" {
+            if !tty.isEmpty && tty != "??" && !tty.contains("not a tty") {
                 return tty
             }
         } catch {
@@ -1335,22 +1377,38 @@ class SessionManager {
 
         // Terminal.app
         if terminalInfo.hasPrefix("Terminal") {
-            if !ttyName.isEmpty {
-                activateTerminalByTty(tty: ttyName)
-            } else {
-                activateApp("Terminal")
-            }
+            let context = SessionContext(
+                id: "",
+                projectName: "",
+                workingDirectory: workingDirectory,
+                terminalInfo: terminalInfo,
+                pid: nil,
+                ttyName: ttyName.isEmpty ? nil : ttyName
+            )
+            TerminalAppIntegration.activate(session: context)
             return
         }
 
         // PyCharm
         if terminalInfo == "PyCharm" {
             let projectName = userInfo["projectName"] as? String ?? ""
-            if !projectName.isEmpty || !workingDirectory.isEmpty {
-                activatePyCharmWindow(projectName: projectName, workingDirectory: workingDirectory)
-            } else {
-                activateApp("PyCharm")
+            var metadata: [String: String] = [:]
+            if let pycharmWindow = userInfo["pycharmWindow"] as? String, !pycharmWindow.isEmpty {
+                metadata["pycharmWindow"] = pycharmWindow
             }
+            if let pycharmTabName = userInfo["pycharmTabName"] as? String, !pycharmTabName.isEmpty {
+                metadata["pycharmTabName"] = pycharmTabName
+            }
+            let context = SessionContext(
+                id: "",
+                projectName: projectName,
+                workingDirectory: workingDirectory,
+                terminalInfo: terminalInfo,
+                pid: nil,
+                ttyName: ttyName.isEmpty ? nil : ttyName,
+                metadata: metadata
+            )
+            PyCharmIntegration.activate(session: context)
             return
         }
 
@@ -1387,19 +1445,17 @@ class SessionManager {
             return
         }
 
-        // Special handling for Terminal.app - use stored TTY if available
+        // Special handling for Terminal.app - delegate to TerminalAppIntegration
         if appName.hasPrefix("Terminal") {
-            debugFileLog("Terminal navigation - ttyName: \(session.ttyName ?? "nil"), pid: \(session.pid.map(String.init) ?? "nil")")
-            if let tty = session.ttyName, !tty.isEmpty {
-                debugFileLog("Activating Terminal by TTY: \(tty)")
-                activateTerminalByTty(tty: tty)
-            } else if let pid = session.pid {
-                debugFileLog("Activating Terminal by PID: \(pid)")
-                activateTerminalTab(pid: pid, workingDirectory: session.workingDirectory)
-            } else {
-                debugFileLog("No TTY or PID, falling back to activateApp(Terminal)")
-                activateApp("Terminal")
-            }
+            let context = SessionContext(
+                id: session.id,
+                projectName: session.projectName,
+                workingDirectory: session.workingDirectory,
+                terminalInfo: session.terminalInfo,
+                pid: session.pid,
+                ttyName: session.ttyName
+            )
+            TerminalAppIntegration.activate(session: context)
             return
         }
 
@@ -1422,19 +1478,25 @@ class SessionManager {
             return
         }
 
-        // Special handling for PyCharm - use stored window name if available
+        // Special handling for PyCharm - delegate to PyCharmIntegration
         if appName == "PyCharm" {
-            debugFileLog("PyCharm navigation - pycharmWindow: \(session.pycharmWindow ?? "nil"), projectName: \(session.projectName)")
-            NSLog("PyCharm navigation - pycharmWindow: \(session.pycharmWindow ?? "nil"), projectName: \(session.projectName)")
+            var metadata: [String: String] = [:]
             if let windowName = session.pycharmWindow, !windowName.isEmpty {
-                debugFileLog("Using stored window name: \(windowName)")
-                NSLog("Using stored window name: \(windowName)")
-                activatePyCharmWindowByName(windowName: windowName)
-            } else {
-                debugFileLog("Using project name search")
-                NSLog("Using project name search")
-                activatePyCharmWindow(projectName: session.projectName, workingDirectory: session.workingDirectory)
+                metadata["pycharmWindow"] = windowName
             }
+            if let tabName = session.pycharmTabName, !tabName.isEmpty {
+                metadata["pycharmTabName"] = tabName
+            }
+            let context = SessionContext(
+                id: session.id,
+                projectName: session.projectName,
+                workingDirectory: session.workingDirectory,
+                terminalInfo: session.terminalInfo,
+                pid: session.pid,
+                ttyName: session.ttyName,
+                metadata: metadata
+            )
+            PyCharmIntegration.activate(session: context)
             return
         }
 
@@ -1474,131 +1536,6 @@ class SessionManager {
         var error: NSDictionary?
         if let appleScript = NSAppleScript(source: script) {
             appleScript.executeAndReturnError(&error)
-        }
-    }
-
-    func activateTerminalByTty(tty: String) {
-        let script = """
-            tell application "Terminal"
-                activate
-                set targetTTY to "/dev/\(tty)"
-                repeat with w in windows
-                    repeat with t in tabs of w
-                        try
-                            if tty of t is targetTTY then
-                                set selected of t to true
-                                set index of w to 1
-                                return "found"
-                            end if
-                        end try
-                    end repeat
-                end repeat
-                return "not found"
-            end tell
-            """
-        var error: NSDictionary?
-        if let appleScript = NSAppleScript(source: script) {
-            let result = appleScript.executeAndReturnError(&error)
-            debugFileLog("activateTerminalByTty result: \(result.stringValue ?? "nil"), error: \(error ?? [:])")
-        }
-    }
-
-    func activatePyCharmWindowByName(windowName: String) {
-        NSLog("activatePyCharmWindowByName: searching for '\(windowName)'")
-        let script = """
-            tell application "System Events"
-                tell process "pycharm"
-                    repeat with w in windows
-                        set wName to name of w as text
-                        if wName contains "\(windowName)" then
-                            tell application "PyCharm" to activate
-                            perform action "AXRaise" of w
-                            return "found"
-                        end if
-                    end repeat
-                end tell
-            end tell
-            tell application "PyCharm" to activate
-            return "not found, activated PyCharm"
-            """
-        var error: NSDictionary?
-        if let appleScript = NSAppleScript(source: script) {
-            let result = appleScript.executeAndReturnError(&error)
-            NSLog("activatePyCharmWindowByName result: \(result.stringValue ?? "nil"), error: \(error ?? [:])")
-        }
-    }
-
-    func activatePyCharmWindow(projectName: String, workingDirectory: String) {
-        // Extract potential project names to match against window titles
-        var searchTerms = projectName.components(separatedBy: ":")
-        searchTerms += projectName.components(separatedBy: "/")
-        searchTerms.append(URL(fileURLWithPath: workingDirectory).lastPathComponent)
-        searchTerms = Array(Set(searchTerms.filter { !$0.isEmpty }))
-
-        // Try each search term
-        for term in searchTerms {
-            let script = """
-                tell application "System Events"
-                    tell process "pycharm"
-                        repeat with w in windows
-                            set wName to name of w as text
-                            if wName contains "\(term)" then
-                                tell application "PyCharm" to activate
-                                perform action "AXRaise" of w
-                                return "found"
-                            end if
-                        end repeat
-                    end tell
-                end tell
-                return "not found"
-                """
-
-            var error: NSDictionary?
-            if let appleScript = NSAppleScript(source: script),
-               let result = appleScript.executeAndReturnError(&error).stringValue,
-               result == "found" {
-                return
-            }
-        }
-
-        // Fallback: just activate PyCharm
-        activateApp("PyCharm")
-    }
-
-    func activateTerminalTab(pid: Int32, workingDirectory: String) {
-        // Get TTY via shell (more reliable)
-        let ttyScript = """
-            do shell script "ps -p \(pid) -o tty= | tr -d ' '"
-            """
-        var ttyError: NSDictionary?
-        let tty = NSAppleScript(source: ttyScript)?.executeAndReturnError(&ttyError).stringValue ?? ""
-        debugFileLog("activateTerminalTab: pid=\(pid), resolved tty='\(tty)'")
-
-        // Activate Terminal tab by TTY
-        let script = """
-            tell application "Terminal"
-                activate
-                if "\(tty)" is not "" and "\(tty)" is not "??" then
-                    set targetTTY to "/dev/\(tty)"
-                    repeat with w in windows
-                        repeat with t in tabs of w
-                            try
-                                if tty of t is targetTTY then
-                                    set selected of t to true
-                                    set index of w to 1
-                                    return "found"
-                                end if
-                            end try
-                        end repeat
-                    end repeat
-                end if
-            end tell
-            """
-
-        var error: NSDictionary?
-        if let appleScript = NSAppleScript(source: script) {
-            let result = appleScript.executeAndReturnError(&error)
-            debugFileLog("activateTerminalTab result: \(result.stringValue ?? "nil"), error: \(error ?? [:])")
         }
     }
 
@@ -2275,11 +2212,9 @@ class SessionManager {
                 synth = s
             }
 
-            self.withAbsoluteVolume(duration: 5.0) { adjustedVolume in
-                synth.volume = adjustedVolume
-                let success = synth.startSpeaking(textToSpeak)
-                debugLog("startSpeaking returned: \(success) for text: '\(textToSpeak)' (korean=\(useKorean)), adjustedVolume: \(adjustedVolume)")
-            }
+            synth.volume = self.soundVolume
+            let success = synth.startSpeaking(textToSpeak)
+            debugLog("startSpeaking returned: \(success) for text: '\(textToSpeak)' (korean=\(useKorean)), volume: \(self.soundVolume)")
         }
     }
 
@@ -2305,73 +2240,6 @@ class SessionManager {
     }
 
     private var alertSound: NSSound?
-    private var savedSystemVolume: Float?
-
-    // MARK: - System Volume (CoreAudio)
-
-    private func getDefaultOutputDeviceID() -> AudioDeviceID? {
-        var deviceID = AudioDeviceID(0)
-        var size = UInt32(MemoryLayout.size(ofValue: deviceID))
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
-        return status == noErr ? deviceID : nil
-    }
-
-    private func getSystemVolume() -> Float? {
-        guard let deviceID = getDefaultOutputDeviceID() else { return nil }
-        var volume = Float32(0)
-        var size = UInt32(MemoryLayout.size(ofValue: volume))
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &volume)
-        return status == noErr ? volume : nil
-    }
-
-    private func setSystemVolume(_ volume: Float) {
-        guard let deviceID = getDefaultOutputDeviceID() else { return }
-        var vol = Float32(max(0, min(1, volume)))
-        let size = UInt32(MemoryLayout.size(ofValue: vol))
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        AudioObjectSetPropertyData(deviceID, &address, 0, nil, size, &vol)
-    }
-
-    /// Play sound/voice at absolute volume independent of system volume.
-    /// Temporarily adjusts system volume if needed, then restores it.
-    private func withAbsoluteVolume(duration: TimeInterval = 1.5, action: @escaping (_ adjustedVolume: Float) -> Void) {
-        let desired = self.soundVolume
-        let systemVol = getSystemVolume() ?? 1.0
-        debugLog("withAbsoluteVolume: desired=\(desired), systemVol=\(systemVol)")
-
-        if systemVol <= 0.001 {
-            // System is muted, temporarily set to desired volume
-            setSystemVolume(desired)
-            action(1.0)
-            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-                self?.setSystemVolume(0)
-            }
-        } else if systemVol >= desired {
-            // System volume is high enough, just scale down
-            action(desired / systemVol)
-        } else {
-            // System volume is too low, boost it temporarily
-            setSystemVolume(desired)
-            action(1.0)
-            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-                self?.setSystemVolume(systemVol)
-            }
-        }
-    }
 
     func playAlertSound() {
         debugLog("playAlertSound called")
@@ -2388,11 +2256,9 @@ class SessionManager {
             }
             if let sound = self.alertSound {
                 sound.stop()
-                self.withAbsoluteVolume(duration: 1.5) { adjustedVolume in
-                    sound.volume = adjustedVolume
-                    let success = sound.play()
-                    debugLog("NSSound.play() returned: \(success), adjustedVolume: \(adjustedVolume)")
-                }
+                sound.volume = self.soundVolume
+                let success = sound.play()
+                debugLog("NSSound.play() returned: \(success), volume: \(self.soundVolume)")
             } else {
                 debugLog("ERROR: Failed to load Glass sound")
             }
@@ -2424,11 +2290,9 @@ class SessionManager {
 
             let testText = "Task completed"
             debugLog("Speaking test: \(testText)")
-            self.withAbsoluteVolume(duration: 3.0) { [weak self] adjustedVolume in
-                self?.englishSynthesizer?.volume = adjustedVolume
-                let success = self?.englishSynthesizer?.startSpeaking(testText) ?? false
-                debugLog("testVoice startSpeaking returned: \(success), adjustedVolume: \(adjustedVolume)")
-            }
+            self.englishSynthesizer?.volume = self.soundVolume
+            let success = self.englishSynthesizer?.startSpeaking(testText) ?? false
+            debugLog("testVoice startSpeaking returned: \(success), volume: \(self.soundVolume)")
         }
     }
 

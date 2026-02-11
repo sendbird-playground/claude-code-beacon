@@ -839,6 +839,7 @@ struct SettingsView: View {
     }
 
     @State private var selectedTab = 0
+    @State private var pycharmPluginDetected = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1002,6 +1003,35 @@ struct SettingsView: View {
                             sessionManager.openReleasePage()
                         }
                         .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+
+            Section("PyCharm Plugin") {
+                HStack {
+                    if pycharmPluginDetected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Beacon plugin detected")
+                    } else {
+                        Image(systemName: "info.circle")
+                            .foregroundColor(.secondary)
+                        Text("Install plugin for tab navigation")
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Button("Check") {
+                        pycharmPluginDetected = PyCharmIntegration.isPluginAvailable()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .onAppear {
+                    DispatchQueue.global(qos: .utility).async {
+                        let available = PyCharmIntegration.isPluginAvailable()
+                        DispatchQueue.main.async {
+                            pycharmPluginDetected = available
+                        }
                     }
                 }
             }

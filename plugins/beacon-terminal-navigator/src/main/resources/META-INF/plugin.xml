@@ -1,0 +1,60 @@
+<idea-plugin>
+    <id>dev.lyoo.beacon.terminal-navigator</id>
+    <name>Beacon Terminal Navigator</name>
+    <vendor email="changhyun@lyoo.dev" url="https://github.com/sendbird-playground/claude-code-beacon">
+        lyoo
+    </vendor>
+
+    <description><![CDATA[
+        <h2>Beacon Terminal Navigator</h2>
+        <p>
+            Companion plugin for <a href="https://github.com/sendbird-playground/claude-code-beacon">Beacon</a>,
+            a macOS menu bar app that sends notifications when Claude Code tasks complete.
+        </p>
+        <p>
+            This plugin provides a local HTTP API that allows Beacon to navigate directly to the
+            correct terminal tab in JetBrains IDEs — no Accessibility permissions or fragile
+            UI automation required.
+        </p>
+
+        <h3>How it works</h3>
+        <ul>
+            <li>Starts a lightweight HTTP server on <code>127.0.0.1:19877</code> (loopback only)</li>
+            <li>When a Claude Code task completes, Beacon calls the plugin to focus the right terminal tab</li>
+            <li>Uses native JetBrains APIs — works reliably across locales, versions, and custom tab names</li>
+        </ul>
+
+        <h3>API</h3>
+        <ul>
+            <li><code>GET /health</code> — returns <code>ok</code> (used by Beacon to detect plugin)</li>
+            <li><code>POST /focus-terminal</code> — accepts <code>{"project":"…", "tabName":"…"}</code> to focus a terminal tab</li>
+        </ul>
+
+        <h3>Requirements</h3>
+        <ul>
+            <li><a href="https://github.com/sendbird-playground/claude-code-beacon">Beacon</a> macOS app installed</li>
+            <li>Terminal plugin enabled in your JetBrains IDE</li>
+        </ul>
+    ]]></description>
+
+    <change-notes><![CDATA[
+        <h3>1.0.0</h3>
+        <ul>
+            <li>Initial release</li>
+            <li>HTTP server on 127.0.0.1:19877 for terminal tab navigation</li>
+            <li>Supports all JetBrains IDEs with the Terminal plugin</li>
+        </ul>
+    ]]></change-notes>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.terminal</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService
+            serviceImplementation="dev.lyoo.beacon.BeaconService"
+        />
+        <postStartupActivity
+            implementation="dev.lyoo.beacon.BeaconStartupActivity"
+        />
+    </extensions>
+</idea-plugin>

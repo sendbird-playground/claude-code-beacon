@@ -71,13 +71,17 @@ public struct iTerm2Integration: TerminalIntegration {
     }
 
     private static func activateBySessionId(_ sessionId: String) {
+        // ITERM_SESSION_ID format is "w0t0p0:GUID" - extract unique ID for matching
+        let uniqueId = sessionId.contains(":") ? String(sessionId.split(separator: ":").last ?? Substring(sessionId)) : sessionId
+
         let script = """
             tell application "iTerm2"
                 activate
                 repeat with w in windows
                     repeat with t in tabs of w
                         repeat with s in sessions of t
-                            if id of s is "\(sessionId)" then
+                            set sid to id of s as text
+                            if sid contains "\(uniqueId)" then
                                 select t
                                 select s
                                 return "found"
