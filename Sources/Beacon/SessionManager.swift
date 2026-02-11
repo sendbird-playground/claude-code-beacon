@@ -834,10 +834,18 @@ class SessionManager {
                 // Try to find git root for better project name
                 let projectName = getProjectName(for: process.cwd, terminal: process.terminal)
 
-                // Get PyCharm window name if this is a PyCharm session
+                // Get PyCharm window/tab info if this is a PyCharm session
                 var pycharmWindow: String? = nil
+                var pycharmTabName: String? = nil
                 if process.terminal == "PyCharm" {
-                    pycharmWindow = getFrontmostPyCharmWindow()
+                    // Try plugin first for accurate tab info
+                    if let pluginInfo = PyCharmIntegration.queryPluginForProject(workingDirectory: process.cwd) {
+                        pycharmWindow = pluginInfo.project
+                        pycharmTabName = pluginInfo.tabName
+                    } else {
+                        // Fallback to AppleScript for window name only
+                        pycharmWindow = getFrontmostPyCharmWindow()
+                    }
                 }
 
                 // Inherit groupId from previous session with same working directory
@@ -859,6 +867,7 @@ class SessionManager {
                     weztermPane: process.weztermPane,
                     ttyName: process.ttyName,
                     pycharmWindow: pycharmWindow,
+                    pycharmTabName: pycharmTabName,
                     groupId: inheritedGroupId,
                     detectedMidRun: true  // Session was already running when detected
                 )
@@ -943,9 +952,11 @@ class SessionManager {
     }
 
     func getFrontmostPyCharmWindow() -> String? {
+        // Dynamically find the PyCharm process name
+        let processName = getJetBrainsProcessName() ?? "pycharm"
         let script = """
             tell application "System Events"
-                tell process "pycharm"
+                tell process "\(processName)"
                     set frontWindowName to name of front window
                     -- Extract project name (before " – ")
                     set AppleScript's text item delimiters to " – "
@@ -958,6 +969,33 @@ class SessionManager {
         if let appleScript = NSAppleScript(source: script),
            let result = appleScript.executeAndReturnError(&error).stringValue {
             return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
+    /// Get the actual System Events process name for the running JetBrains IDE
+    private func getJetBrainsProcessName() -> String? {
+        let script = """
+            tell application "System Events"
+                set processList to name of every process
+                repeat with procName in processList
+                    if procName contains "pycharm" or procName contains "PyCharm" then
+                        return procName as text
+                    end if
+                end repeat
+                repeat with procName in processList
+                    if procName contains "jetbrains" or procName contains "JetBrains" then
+                        return procName as text
+                    end if
+                end repeat
+            end tell
+            return ""
+            """
+        var error: NSDictionary?
+        if let appleScript = NSAppleScript(source: script),
+           let result = appleScript.executeAndReturnError(&error).stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !result.isEmpty {
+            return result
         }
         return nil
     }
@@ -1014,10 +1052,16 @@ class SessionManager {
     }
 
     func getPyCharmProjectForPath(_ cwd: String) -> String? {
-        // Get PyCharm window titles via AppleScript
+        // Try plugin first — most reliable
+        if let pluginInfo = PyCharmIntegration.queryPluginForProject(workingDirectory: cwd) {
+            return pluginInfo.project
+        }
+
+        // Fallback: Get PyCharm window titles via AppleScript
+        let processName = getJetBrainsProcessName() ?? "pycharm"
         let script = """
             tell application "System Events"
-                tell process "pycharm"
+                tell process "\(processName)"
                     set windowNames to name of every window
                     set output to ""
                     repeat with wName in windowNames

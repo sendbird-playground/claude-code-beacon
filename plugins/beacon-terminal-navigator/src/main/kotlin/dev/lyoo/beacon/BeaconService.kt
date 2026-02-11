@@ -6,6 +6,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.openapi.wm.WindowManager
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.net.InetAddress
@@ -97,45 +98,87 @@ class BeaconService {
             val body = ex.requestBody.bufferedReader().readText()
             val projectName = extractJsonString(body, "project")
             val tabName = extractJsonString(body, "tabName")
+            val basePath = extractJsonString(body, "basePath")
 
-            if (projectName.isNullOrEmpty() || tabName.isNullOrEmpty()) {
-                respond(ex, 400, "missing project or tabName")
+            if (projectName.isNullOrEmpty() && basePath.isNullOrEmpty()) {
+                respond(ex, 400, "missing project or basePath")
                 return
             }
 
-            // Find the matching project
+            // Find the matching project — try name first, then basePath
             val project = ProjectManager.getInstance().openProjects.firstOrNull { p ->
-                p.name == projectName || (p.basePath?.endsWith(projectName) == true)
+                if (!projectName.isNullOrEmpty()) {
+                    p.name == projectName || (p.basePath?.endsWith(projectName) == true)
+                } else {
+                    false
+                }
+            } ?: if (!basePath.isNullOrEmpty()) {
+                ProjectManager.getInstance().openProjects.firstOrNull { p ->
+                    val pb = p.basePath ?: ""
+                    pb == basePath || basePath.startsWith(pb + "/")
+                }
+            } else {
+                null
             }
 
             if (project == null) {
-                respond(ex, 404, "project not found")
+                respond(ex, 404, "project not found: name=$projectName basePath=$basePath")
                 return
             }
 
-            // Switch to the terminal tab on the EDT
+            val latch = CountDownLatch(1)
+            var success = false
+
             ApplicationManager.getApplication().invokeLater {
-                val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Terminal")
-                if (toolWindow == null) {
-                    log.warn("Terminal tool window not found for project: $projectName")
-                    return@invokeLater
-                }
-                toolWindow.show {
-                    val cm = toolWindow.contentManager
-                    val content = cm.contents.firstOrNull { c ->
-                        c.displayName == tabName
-                    }
-                    if (content != null) {
-                        cm.setSelectedContent(content)
-                        log.info("Focused terminal tab '$tabName' in project '$projectName'")
+                try {
+                    // 1. Switch terminal tab if tabName is provided
+                    val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Terminal")
+                    if (toolWindow != null) {
+                        toolWindow.show {
+                            if (!tabName.isNullOrEmpty()) {
+                                val cm = toolWindow.contentManager
+                                val content = cm.contents.firstOrNull { c ->
+                                    c.displayName == tabName
+                                }
+                                if (content != null) {
+                                    cm.setSelectedContent(content)
+                                    log.info("Focused terminal tab '$tabName' in project '${project.name}'")
+                                } else {
+                                    log.warn("Terminal tab '$tabName' not found in project '${project.name}'. " +
+                                            "Available: ${cm.contents.map { it.displayName }}")
+                                }
+                            }
+                        }
                     } else {
-                        log.warn("Terminal tab '$tabName' not found in project '$projectName'. " +
-                                "Available: ${cm.contents.map { it.displayName }}")
+                        log.warn("Terminal tool window not found for project: ${project.name}")
                     }
+
+                    // 2. Bring the IDE window to front
+                    val frame = WindowManager.getInstance().getFrame(project)
+                    if (frame != null) {
+                        frame.toFront()
+                        frame.requestFocus()
+                        log.info("Brought IDE window to front for project '${project.name}'")
+                    }
+
+                    success = true
+                } catch (e: Exception) {
+                    log.warn("Error focusing terminal: ${e.message}")
+                } finally {
+                    latch.countDown()
                 }
             }
 
-            respond(ex, 200, "ok")
+            // Wait for EDT to complete so caller knows the result
+            if (latch.await(3, TimeUnit.SECONDS)) {
+                if (success) {
+                    respond(ex, 200, "ok")
+                } else {
+                    respond(ex, 500, "focus failed")
+                }
+            } else {
+                respond(ex, 504, "timeout")
+            }
         } catch (e: Exception) {
             log.warn("Error handling /focus-terminal: ${e.message}")
             respond(ex, 500, "error: ${e.message}")
