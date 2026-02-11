@@ -615,13 +615,24 @@ class SessionManager {
 
     func requestNotificationPermission() {
         let center = UNUserNotificationCenter.current()
+
+        // Log current authorization status before requesting
+        center.getNotificationSettings { settings in
+            let statusNames = ["notDetermined", "denied", "authorized", "provisional", "ephemeral"]
+            let statusName = settings.authorizationStatus.rawValue < statusNames.count
+                ? statusNames[Int(settings.authorizationStatus.rawValue)]
+                : "unknown(\(settings.authorizationStatus.rawValue))"
+            debugLog("Notification auth status before request: \(statusName)")
+            debugLog("Bundle identifier: \(Bundle.main.bundleIdentifier ?? "nil")")
+        }
+
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            NSLog("Notification permission granted: \(granted)")
+            debugLog("Notification permission granted: \(granted)")
             if let error = error {
-                NSLog("Notification permission error: \(error)")
+                debugLog("Notification permission error: \(error)")
             }
             if !granted {
-                NSLog("Notifications denied. Enable in System Settings > Notifications > Beacon")
+                debugLog("Notifications denied. Enable in System Settings > Notifications > Beacon")
             }
         }
     }

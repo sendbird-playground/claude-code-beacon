@@ -63,6 +63,10 @@ cat > "$OUTPUT_DIR/$BUNDLE_NAME/Contents/Info.plist" << EOF
     <true/>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
+    <key>CFBundleDisplayName</key>
+    <string>$APP_NAME</string>
+    <key>NSUserNotificationAlertStyle</key>
+    <string>alert</string>
 </dict>
 </plist>
 EOF
@@ -77,6 +81,10 @@ fi
 
 # Create PkgInfo
 echo -n "APPL????" > "$OUTPUT_DIR/$BUNDLE_NAME/Contents/PkgInfo"
+
+# Ad-hoc sign with correct bundle identifier so macOS recognizes app for notifications
+echo "Signing app bundle with identifier $BUNDLE_ID..."
+codesign --force --deep --sign - --identifier "$BUNDLE_ID" "$OUTPUT_DIR/$BUNDLE_NAME"
 
 echo ""
 echo "Build complete!"

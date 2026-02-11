@@ -10,19 +10,7 @@ LAUNCHAGENT_LABEL="com.sendbird.Beacon"
 # Build app using build.sh
 ./build.sh
 
-echo ""
-echo "Signing app bundle..."
-# Ad-hoc sign with hardened runtime for notification permissions
-codesign --force --deep --sign - --entitlements /dev/stdin build/Beacon.app << 'ENTITLEMENTS'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.app-sandbox</key>
-    <false/>
-</dict>
-</plist>
-ENTITLEMENTS
+BUNDLE_ID="com.sendbird.Beacon"
 
 # Stop existing LaunchAgent if running
 if launchctl list | grep -q "$LAUNCHAGENT_LABEL"; then
@@ -38,8 +26,9 @@ echo "Installing to /Applications..."
 rm -rf /Applications/Beacon.app
 cp -r build/Beacon.app /Applications/
 
-# Re-sign after copy to ensure signature is intact
-codesign --force --deep --sign - /Applications/Beacon.app
+# Sign after copy with correct bundle identifier for notification permissions
+echo "Signing app bundle..."
+codesign --force --deep --sign - --identifier "$BUNDLE_ID" /Applications/Beacon.app
 
 # Install LaunchAgent for auto-restart
 echo "Installing LaunchAgent for auto-restart..."
