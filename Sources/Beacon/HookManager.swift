@@ -196,6 +196,15 @@ class HookManager {
             tty_name=$(ps -p $grandparent -o tty= 2>/dev/null | tr -d ' ')
         fi
 
+        # Detect if other Claude processes are still running in same directory (sub-agent scenario)
+        is_subagent="false"
+        sibling_count=0
+        sibling_count=$(ps aux 2>/dev/null | grep -i "[c]laude" | grep -v "grep" | grep -c "$cwd" || echo "0")
+        sibling_count=$(echo "$sibling_count" | tr -d ' ')
+        if [[ "$sibling_count" -gt 1 ]]; then
+            is_subagent="true"
+        fi
+
         if [[ -n "$TERMINAL_EMULATOR" ]] && [[ "$TERMINAL_EMULATOR" == *"JetBrains"* ]]; then
             app_name="PyCharm"
             tab_info="PyCharm"
@@ -237,7 +246,7 @@ class HookManager {
         escaped_details=$(echo "$task_details" | sed 's/"/\\\\"/g')
         curl -s -X POST "http://localhost:${BEACON_PORT}" \\
             -H "Content-Type: application/json" \\
-            -d "{\\"id\\":\\"${SESSION_ID}\\",\\"projectName\\":\\"${project_identifier}\\",\\"terminalInfo\\":\\"${tab_info}\\",\\"workingDirectory\\":\\"${cwd}\\",\\"summary\\":\\"${task_summary}\\",\\"details\\":\\"${escaped_details}\\",\\"tag\\":\\"${session_tag}\\",\\"weztermPane\\":\\"${wezterm_pane}\\",\\"ttyName\\":\\"${tty_name}\\",\\"pycharmWindow\\":\\"${pycharm_window}\\",\\"pycharmTabName\\":\\"${pycharm_tab_name}\\",\\"itermSessionId\\":\\"${iterm_session_id}\\"}" \\
+            -d "{\\"id\\":\\"${SESSION_ID}\\",\\"projectName\\":\\"${project_identifier}\\",\\"terminalInfo\\":\\"${tab_info}\\",\\"workingDirectory\\":\\"${cwd}\\",\\"summary\\":\\"${task_summary}\\",\\"details\\":\\"${escaped_details}\\",\\"tag\\":\\"${session_tag}\\",\\"weztermPane\\":\\"${wezterm_pane}\\",\\"ttyName\\":\\"${tty_name}\\",\\"pycharmWindow\\":\\"${pycharm_window}\\",\\"pycharmTabName\\":\\"${pycharm_tab_name}\\",\\"itermSessionId\\":\\"${iterm_session_id}\\",\\"isSubagent\\":\\"${is_subagent}\\",\\"siblingCount\\":\\"${sibling_count}\\"}" \\
             --connect-timeout 1 2>/dev/null &
         """
     }

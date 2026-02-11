@@ -176,6 +176,9 @@ struct ClaudeSession: Identifiable, Codable {
     // True if session was detected while already running (not tracked from start)
     var detectedMidRun: Bool = false
 
+    // True if completion was triggered by a sub-agent stop hook
+    var isSubagentStop: Bool = false
+
     init(
         id: String = UUID().uuidString,
         projectName: String,
@@ -200,7 +203,8 @@ struct ClaudeSession: Identifiable, Codable {
         groupId: String? = nil,
         alertTriggeredAt: Date? = nil,
         orderInGroup: Int = 0,
-        detectedMidRun: Bool = false
+        detectedMidRun: Bool = false,
+        isSubagentStop: Bool = false
     ) {
         self.id = id
         self.projectName = projectName
@@ -226,6 +230,7 @@ struct ClaudeSession: Identifiable, Codable {
         self.alertTriggeredAt = alertTriggeredAt
         self.orderInGroup = orderInGroup
         self.detectedMidRun = detectedMidRun
+        self.isSubagentStop = isSubagentStop
     }
 
     // Custom decoder for backward compatibility with older saved data
@@ -256,6 +261,7 @@ struct ClaudeSession: Identifiable, Codable {
         // Fields with defaults for backward compatibility
         orderInGroup = try container.decodeIfPresent(Int.self, forKey: .orderInGroup) ?? 0
         detectedMidRun = try container.decodeIfPresent(Bool.self, forKey: .detectedMidRun) ?? false
+        isSubagentStop = try container.decodeIfPresent(Bool.self, forKey: .isSubagentStop) ?? false
     }
 
     // Display summary with fallback
@@ -288,6 +294,8 @@ class SessionManager {
     private let scanQueue = DispatchQueue(label: "com.beacon.scanQueue")  // Serial queue to prevent race conditions
     private var httpListener: NWListener?
     private var processMonitors: [Int32: DispatchSourceProcess] = [:]  // PID -> dispatch source for exit monitoring
+    private var pendingNotifications: [String: DispatchWorkItem] = [:] // workingDirectory -> pending timer
+    private let notificationDebounceInterval: TimeInterval = 3.0
 
     // Settings
     var notificationEnabled: Bool = true {
@@ -571,6 +579,8 @@ class SessionManager {
         let pycharmWindow = json["pycharmWindow"] as? String
         let pycharmTabName = json["pycharmTabName"] as? String
         let itermSessionId = json["itermSessionId"] as? String
+        let isSubagent = json["isSubagent"] as? String == "true"
+        let siblingCount = Int(json["siblingCount"] as? String ?? "0") ?? 0
 
         // Validate TTY - re-resolve from PID if invalid
         if let tty = ttyName, (tty.isEmpty || tty == "??" || tty.contains("not a tty")) {
@@ -614,9 +624,11 @@ class SessionManager {
                 self.sessions[index].pycharmWindow = pycharmWindow
                 self.sessions[index].pycharmTabName = pycharmTabName
                 self.sessions[index].itermSessionId = itermSessionId
+                self.sessions[index].isSubagentStop = isSubagent
                 self.sessions[index].status = .completed
                 self.sessions[index].completedAt = Date()
-                self.sendCompletionNotification(for: self.sessions[index])
+                let debounce: TimeInterval = (isSubagent || siblingCount > 0) ? 5.0 : self.notificationDebounceInterval
+                self.scheduleNotification(for: self.sessions[index], debounceInterval: debounce)
             } else {
                 // Create new completed session from hook
                 let session = ClaudeSession(
@@ -632,10 +644,12 @@ class SessionManager {
                     ttyName: ttyName,
                     pycharmWindow: pycharmWindow,
                     pycharmTabName: pycharmTabName,
-                    itermSessionId: itermSessionId
+                    itermSessionId: itermSessionId,
+                    isSubagentStop: isSubagent
                 )
                 self.sessions.insert(session, at: 0)
-                self.sendCompletionNotification(for: session)
+                let debounce: TimeInterval = (isSubagent || siblingCount > 0) ? 5.0 : self.notificationDebounceInterval
+                self.scheduleNotification(for: session, debounceInterval: debounce)
             }
 
             self.saveSessions()
@@ -2003,6 +2017,23 @@ class SessionManager {
         }
 
         return false
+    }
+
+    private func scheduleNotification(for session: ClaudeSession, debounceInterval: TimeInterval? = nil) {
+        let key = session.workingDirectory
+        let interval = debounceInterval ?? notificationDebounceInterval
+
+        // Cancel any existing pending notification for this working directory
+        pendingNotifications[key]?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.sendCompletionNotification(for: session)
+            self.pendingNotifications.removeValue(forKey: key)
+        }
+
+        pendingNotifications[key] = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: workItem)
     }
 
     func sendCompletionNotification(for session: ClaudeSession) {

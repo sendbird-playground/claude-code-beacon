@@ -69,6 +69,8 @@ public struct PyCharmIntegration: TerminalIntegration {
             log("plugin failed with stored tab info, trying basePath match...")
         }
 
+        log("activate: strategy 1 (stored tab) failed or skipped")
+
         // Strategy 2: No stored tabName (running session) — dynamically query plugin by working directory
         if let pluginInfo = queryPluginForProject(workingDirectory: session.workingDirectory) {
             log("dynamic plugin query found project=\(pluginInfo.project), tab=\(pluginInfo.tabName)")
@@ -79,6 +81,8 @@ public struct PyCharmIntegration: TerminalIntegration {
             }
         }
 
+        log("activate: strategy 2 (dynamic query) failed or not available")
+
         // Strategy 3: Plugin unavailable — use basePath to focus without tab info
         if focusViaPlugin(project: windowName ?? session.projectName, tabName: nil, basePath: session.workingDirectory) {
             log("plugin focused project window only (no tab) — done")
@@ -86,6 +90,7 @@ public struct PyCharmIntegration: TerminalIntegration {
             return
         }
 
+        log("activate: strategy 3 (project-only) failed")
         log("plugin not available or all strategies failed, falling back to AppleScript")
 
         // Strategy 4: Fall back to AppleScript window-level navigation (no tab switching)
@@ -136,7 +141,7 @@ public struct PyCharmIntegration: TerminalIntegration {
                       let project = entry["project"] as? String,
                       let tabName = entry["tabName"] as? String else { continue }
 
-                if workingDirectory == basePath || workingDirectory.hasPrefix(basePath + "/") {
+                if workingDirectory == basePath || workingDirectory.hasPrefix(basePath + "/") || basePath.hasPrefix(workingDirectory + "/") {
                     let allTabs = entry["tabs"] as? [String] ?? []
                     return PluginProjectInfo(project: project, basePath: basePath, tabName: tabName, allTabs: allTabs)
                 }
@@ -151,7 +156,7 @@ public struct PyCharmIntegration: TerminalIntegration {
     /// Focus a terminal tab via the Beacon Terminal Navigator JetBrains plugin.
     /// The plugin now also brings the IDE window to front.
     /// Returns true if the plugin responded successfully.
-    private static func focusViaPlugin(project: String, tabName: String?, basePath: String?) -> Bool {
+    private static func focusViaPlugin(project: String, tabName: String?, basePath: String?, retryOnFailure: Bool = true) -> Bool {
         // Build JSON payload
         var fields: [String] = []
         fields.append("\"project\":\"\(escapeJsonString(project))\"")
@@ -163,14 +168,27 @@ public struct PyCharmIntegration: TerminalIntegration {
         }
         let payload = "{\(fields.joined(separator: ","))}"
 
+        let success = sendPluginRequest(endpoint: "focus-terminal", payload: payload, maxTime: "3")
+
+        if !success && retryOnFailure {
+            log("focusViaPlugin: first attempt failed, retrying with longer timeout...")
+            Thread.sleep(forTimeInterval: 0.5)
+            return sendPluginRequest(endpoint: "focus-terminal", payload: payload, maxTime: "5")
+        }
+
+        return success
+    }
+
+    /// Send an HTTP POST request to the JetBrains plugin
+    private static func sendPluginRequest(endpoint: String, payload: String, maxTime: String = "3") -> Bool {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
         task.arguments = [
             "-s", "-o", "/dev/null", "-w", "%{http_code}",
-            "--connect-timeout", "1",
-            "--max-time", "3",
+            "--connect-timeout", "2",
+            "--max-time", maxTime,
             "-X", "POST",
-            "http://127.0.0.1:\(pluginPort)/focus-terminal",
+            "http://127.0.0.1:\(pluginPort)/\(endpoint)",
             "-H", "Content-Type: application/json",
             "-d", payload
         ]
@@ -182,10 +200,10 @@ public struct PyCharmIntegration: TerminalIntegration {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             task.waitUntilExit()
             let httpCode = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            log("focusViaPlugin HTTP \(httpCode) (payload: \(payload))")
+            log("sendPluginRequest /\(endpoint) HTTP \(httpCode) (payload: \(payload))")
             return httpCode == "200"
         } catch {
-            log("focusViaPlugin error: \(error)")
+            log("sendPluginRequest /\(endpoint) error: \(error)")
             return false
         }
     }
