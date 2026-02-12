@@ -61,9 +61,9 @@ public struct PyCharmIntegration: TerminalIntegration {
             let windowProject = windowName ?? session.projectName
             if focusViaPlugin(project: windowProject, tabName: tabName, basePath: nil) {
                 log("plugin focused tab '\(tabName)' in project '\(windowProject)' — done")
-                // Plugin now handles window activation too, but also activate the app
-                // at OS level to ensure it comes to foreground
                 activateJetBrainsApp()
+                // Raise the specific project window (app.activate only brings last-active window)
+                raiseWindow(named: windowProject)
                 return
             }
             log("plugin failed with stored tab info, trying basePath match...")
@@ -77,6 +77,7 @@ public struct PyCharmIntegration: TerminalIntegration {
             if focusViaPlugin(project: pluginInfo.project, tabName: pluginInfo.tabName, basePath: pluginInfo.basePath) {
                 log("plugin focused via dynamic query — done")
                 activateJetBrainsApp()
+                raiseWindow(named: pluginInfo.project)
                 return
             }
         }
@@ -87,6 +88,7 @@ public struct PyCharmIntegration: TerminalIntegration {
         if focusViaPlugin(project: windowName ?? session.projectName, tabName: nil, basePath: session.workingDirectory) {
             log("plugin focused project window only (no tab) — done")
             activateJetBrainsApp()
+            raiseWindow(named: windowName ?? session.projectName)
             return
         }
 
@@ -264,8 +266,8 @@ public struct PyCharmIntegration: TerminalIntegration {
 
     // MARK: - Window-Level Navigation (AppleScript fallback)
 
-    /// Raise a specific PyCharm window by name via AppleScript.
-    /// Uses dynamic process name detection.
+    /// Raise a specific PyCharm window by name via osascript subprocess.
+    /// Uses Process instead of NSAppleScript for reliable AXRaise in LaunchAgent context.
     private static func raiseWindow(named windowProject: String) {
         guard let processName = getJetBrainsProcessName() else {
             log("raiseWindow: could not find JetBrains process name")
@@ -284,8 +286,21 @@ public struct PyCharmIntegration: TerminalIntegration {
             end tell
             return "not found"
             """
-        let result = runAppleScript(script)
-        log("raiseWindow(\(windowProject)): \(result ?? "nil")")
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", script]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let result = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            log("raiseWindow(\(windowProject)): \(result)")
+        } catch {
+            log("raiseWindow(\(windowProject)) error: \(error)")
+        }
     }
 
     private static func raiseWindowByProjectName(_ projectName: String, workingDirectory: String) {
@@ -314,9 +329,23 @@ public struct PyCharmIntegration: TerminalIntegration {
                 end tell
                 return "not found"
                 """
-            if let result = runAppleScript(script), result.trimmingCharacters(in: .whitespacesAndNewlines) == "found" {
-                log("raiseWindowByProjectName: found window matching '\(term)'")
-                return
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            task.arguments = ["-e", script]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = FileHandle.nullDevice
+            do {
+                try task.run()
+                task.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let result = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if result == "found" {
+                    log("raiseWindowByProjectName: found window matching '\(term)'")
+                    return
+                }
+            } catch {
+                log("raiseWindowByProjectName: osascript error for '\(term)': \(error)")
             }
         }
         log("raiseWindowByProjectName: no window found for any search term")
