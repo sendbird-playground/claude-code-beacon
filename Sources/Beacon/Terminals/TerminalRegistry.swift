@@ -22,6 +22,7 @@ public class TerminalRegistry {
         TerminalAppIntegration.self,
 
         // IDEs (JetBrains, VS Code, etc.)
+        CursorIntegration.self,
         PyCharmIntegration.self,
 
         // Add your integration here!

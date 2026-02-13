@@ -1477,6 +1477,21 @@ class SessionManager {
             return
         }
 
+        // Cursor
+        if terminalInfo == "Cursor" {
+            let context = SessionContext(
+                id: "",
+                projectName: userInfo["projectName"] as? String ?? "",
+                workingDirectory: workingDirectory,
+                terminalInfo: terminalInfo,
+                pid: nil,
+                ttyName: ttyName.isEmpty ? nil : ttyName,
+                metadata: [:]
+            )
+            CursorIntegration.activate(session: context)
+            return
+        }
+
         // PyCharm
         if terminalInfo == "PyCharm" {
             let projectName = userInfo["projectName"] as? String ?? ""
@@ -1563,6 +1578,21 @@ class SessionManager {
                 metadata: metadata
             )
             iTerm2Integration.activate(session: context)
+            return
+        }
+
+        // Special handling for Cursor - delegate to CursorIntegration
+        if appName == "Cursor" {
+            let context = SessionContext(
+                id: session.id,
+                projectName: session.projectName,
+                workingDirectory: session.workingDirectory,
+                terminalInfo: session.terminalInfo,
+                pid: session.pid,
+                ttyName: session.ttyName,
+                metadata: [:]
+            )
+            CursorIntegration.activate(session: context)
             return
         }
 
