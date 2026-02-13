@@ -548,10 +548,24 @@ class SessionManager {
             }
 
             // Parse HTTP request to extract JSON body
-            if let requestString = String(data: data, encoding: .utf8),
-               let jsonStart = requestString.range(of: "\r\n\r\n")?.upperBound {
-                let jsonString = String(requestString[jsonStart...])
-                self.handleHookData(jsonString)
+            if let requestString = String(data: data, encoding: .utf8) {
+                debugLog("handleConnection received \(data.count) bytes")
+                if let jsonStart = requestString.range(of: "\r\n\r\n")?.upperBound {
+                    let jsonString = String(requestString[jsonStart...])
+                    debugLog("handleConnection extracted JSON: \(String(jsonString.prefix(200)))")
+                    self.handleHookData(jsonString)
+                } else {
+                    debugLog("handleConnection: no \\r\\n\\r\\n found, trying \\n\\n")
+                    if let jsonStart = requestString.range(of: "\n\n")?.upperBound {
+                        let jsonString = String(requestString[jsonStart...])
+                        debugLog("handleConnection extracted JSON via \\n\\n: \(String(jsonString.prefix(200)))")
+                        self.handleHookData(jsonString)
+                    } else {
+                        debugLog("handleConnection: could not find body separator in request")
+                    }
+                }
+            } else {
+                debugLog("handleConnection: could not decode data as UTF-8")
             }
 
             // Send HTTP 200 response
@@ -563,10 +577,15 @@ class SessionManager {
     }
 
     private func handleHookData(_ jsonString: String) {
-        guard let data = jsonString.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let data = jsonString.data(using: .utf8) else {
+            debugLog("handleHookData: failed to convert string to data")
             return
         }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            debugLog("handleHookData: JSON parse failed for: \(String(jsonString.prefix(200)))")
+            return
+        }
+        debugLog("handleHookData: parsed JSON with keys: \(json.keys.sorted())")
 
         let projectName = json["projectName"] as? String ?? "Unknown"
         let terminalInfo = json["terminalInfo"] as? String ?? "Terminal"
