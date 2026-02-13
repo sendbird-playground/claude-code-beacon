@@ -247,7 +247,7 @@ class HookManager {
         curl -s -X POST "http://localhost:${BEACON_PORT}" \\
             -H "Content-Type: application/json" \\
             -d "{\\"id\\":\\"${SESSION_ID}\\",\\"projectName\\":\\"${project_identifier}\\",\\"terminalInfo\\":\\"${tab_info}\\",\\"workingDirectory\\":\\"${cwd}\\",\\"summary\\":\\"${task_summary}\\",\\"details\\":\\"${escaped_details}\\",\\"tag\\":\\"${session_tag}\\",\\"weztermPane\\":\\"${wezterm_pane}\\",\\"ttyName\\":\\"${tty_name}\\",\\"pycharmWindow\\":\\"${pycharm_window}\\",\\"pycharmTabName\\":\\"${pycharm_tab_name}\\",\\"itermSessionId\\":\\"${iterm_session_id}\\",\\"isSubagent\\":\\"${is_subagent}\\",\\"siblingCount\\":\\"${sibling_count}\\"}" \\
-            --connect-timeout 1 2>/dev/null &
+            --connect-timeout 1 --max-time 3 2>/dev/null || true
         """
     }
 
