@@ -199,8 +199,9 @@ class HookManager {
         # Detect if other Claude processes are still running in same directory (sub-agent scenario)
         is_subagent="false"
         sibling_count=0
-        sibling_count=$(ps aux 2>/dev/null | grep -i "[c]laude" | grep -v "grep" | grep -c "$cwd" || echo "0")
-        sibling_count=$(echo "$sibling_count" | tr -d ' ')
+        sibling_count=$(ps aux 2>/dev/null | grep -i "[c]laude" | grep -v "grep" | grep -c "$cwd" 2>/dev/null)
+        sibling_count=${sibling_count:-0}
+        sibling_count=$(echo "$sibling_count" | tr -d ' \\n')
         if [[ "$sibling_count" -gt 1 ]]; then
             is_subagent="true"
         fi

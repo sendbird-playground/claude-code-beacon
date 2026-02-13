@@ -581,8 +581,19 @@ class SessionManager {
             debugLog("handleHookData: failed to convert string to data")
             return
         }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            debugLog("handleHookData: JSON parse failed for: \(String(jsonString.prefix(200)))")
+        // Log full JSON and raw bytes for debugging
+        debugLog("handleHookData: raw length=\(jsonString.count) bytes=\(data.count) last10bytes=\(Array(data.suffix(10)))")
+        debugLog("handleHookData: full JSON=\(jsonString)")
+
+        let json: [String: Any]
+        do {
+            guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                debugLog("handleHookData: parsed but not a dictionary")
+                return
+            }
+            json = parsed
+        } catch {
+            debugLog("handleHookData: JSON parse ERROR: \(error)")
             return
         }
         debugLog("handleHookData: parsed JSON with keys: \(json.keys.sorted())")
