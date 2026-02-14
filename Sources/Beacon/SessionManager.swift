@@ -158,6 +158,7 @@ struct ClaudeSession: Identifiable, Codable {
     var pycharmWindow: String? // PyCharm window/project name
     var pycharmTabName: String? // PyCharm terminal tab name (e.g., "로컬 (2)")
     var itermSessionId: String? // iTerm2 session ID for pane navigation
+    var cursorWindow: String?   // Cursor window title for window matching
 
     // Per-session settings overrides (nil = use global setting)
     var notificationOverride: Bool?
@@ -197,6 +198,7 @@ struct ClaudeSession: Identifiable, Codable {
         pycharmWindow: String? = nil,
         pycharmTabName: String? = nil,
         itermSessionId: String? = nil,
+        cursorWindow: String? = nil,
         notificationOverride: Bool? = nil,
         soundOverride: Bool? = nil,
         voiceOverride: Bool? = nil,
@@ -223,6 +225,7 @@ struct ClaudeSession: Identifiable, Codable {
         self.pycharmWindow = pycharmWindow
         self.pycharmTabName = pycharmTabName
         self.itermSessionId = itermSessionId
+        self.cursorWindow = cursorWindow
         self.notificationOverride = notificationOverride
         self.soundOverride = soundOverride
         self.voiceOverride = voiceOverride
@@ -253,6 +256,7 @@ struct ClaudeSession: Identifiable, Codable {
         pycharmWindow = try container.decodeIfPresent(String.self, forKey: .pycharmWindow)
         pycharmTabName = try container.decodeIfPresent(String.self, forKey: .pycharmTabName)
         itermSessionId = try container.decodeIfPresent(String.self, forKey: .itermSessionId)
+        cursorWindow = try container.decodeIfPresent(String.self, forKey: .cursorWindow)
         notificationOverride = try container.decodeIfPresent(Bool.self, forKey: .notificationOverride)
         soundOverride = try container.decodeIfPresent(Bool.self, forKey: .soundOverride)
         voiceOverride = try container.decodeIfPresent(Bool.self, forKey: .voiceOverride)
@@ -609,6 +613,7 @@ class SessionManager {
         let pycharmWindow = json["pycharmWindow"] as? String
         let pycharmTabName = json["pycharmTabName"] as? String
         let itermSessionId = json["itermSessionId"] as? String
+        let cursorWindow = json["cursorWindow"] as? String
         let isSubagent = json["isSubagent"] as? String == "true"
         let siblingCount = Int(json["siblingCount"] as? String ?? "0") ?? 0
 
@@ -654,12 +659,19 @@ class SessionManager {
                 self.sessions[index].pycharmWindow = pycharmWindow
                 self.sessions[index].pycharmTabName = pycharmTabName
                 self.sessions[index].itermSessionId = itermSessionId
+                self.sessions[index].cursorWindow = cursorWindow
                 self.sessions[index].isSubagentStop = isSubagent
                 self.sessions[index].status = .completed
                 self.sessions[index].completedAt = Date()
                 let debounce: TimeInterval = (isSubagent || siblingCount > 0) ? 5.0 : self.notificationDebounceInterval
                 self.scheduleNotification(for: self.sessions[index], debounceInterval: debounce)
             } else {
+                // Inherit groupId from previous session with same terminal and working directory
+                let inheritedGroupId = self.sessions.first(where: {
+                    $0.terminalInfo == terminalInfo && $0.workingDirectory == workingDirectory && $0.groupId != nil
+                })?.groupId
+                    ?? self.sessions.first(where: { $0.workingDirectory == workingDirectory && $0.groupId != nil })?.groupId
+
                 // Create new completed session from hook
                 let session = ClaudeSession(
                     projectName: projectName,
@@ -675,6 +687,8 @@ class SessionManager {
                     pycharmWindow: pycharmWindow,
                     pycharmTabName: pycharmTabName,
                     itermSessionId: itermSessionId,
+                    cursorWindow: cursorWindow,
+                    groupId: inheritedGroupId,
                     isSubagentStop: isSubagent
                 )
                 self.sessions.insert(session, at: 0)
@@ -892,14 +906,24 @@ class SessionManager {
                     }
                 }
 
-                // Inherit groupId from previous session with same working directory
-                let matchingSessions = sessions.filter { $0.workingDirectory == process.cwd }
-                NSLog("Looking for groupId inheritance for cwd: \(process.cwd)")
+                // Get Cursor window info if this is a Cursor session
+                var cursorWindow: String? = nil
+                if process.terminal == "Cursor" {
+                    let processInfo = ProcessInfo(pid: process.pid, workingDirectory: process.cwd, terminalName: process.terminal, ttyName: process.ttyName)
+                    let metadata = CursorIntegration.extractMetadata(processInfo: processInfo)
+                    cursorWindow = metadata["cursorWindow"]
+                }
+
+                // Inherit groupId from previous session with same terminal and working directory
+                let matchingSessions = sessions.filter { $0.terminalInfo == process.terminal && $0.workingDirectory == process.cwd }
+                NSLog("Looking for groupId inheritance for terminal: \(process.terminal), cwd: \(process.cwd)")
                 NSLog("Found \(matchingSessions.count) matching sessions")
                 for s in matchingSessions {
                     NSLog("  - Session \(s.id): groupId=\(s.groupId ?? "nil"), status=\(s.status.rawValue)")
                 }
                 let inheritedGroupId = matchingSessions.first(where: { $0.groupId != nil })?.groupId
+                // Fallback: try matching by working directory only if no terminal+dir match
+                    ?? sessions.first(where: { $0.workingDirectory == process.cwd && $0.groupId != nil })?.groupId
                 NSLog("Inherited groupId: \(inheritedGroupId ?? "none")")
 
                 let session = ClaudeSession(
@@ -912,6 +936,7 @@ class SessionManager {
                     ttyName: process.ttyName,
                     pycharmWindow: pycharmWindow,
                     pycharmTabName: pycharmTabName,
+                    cursorWindow: cursorWindow,
                     groupId: inheritedGroupId,
                     detectedMidRun: true  // Session was already running when detected
                 )
@@ -1479,6 +1504,10 @@ class SessionManager {
 
         // Cursor
         if terminalInfo == "Cursor" {
+            var metadata: [String: String] = [:]
+            if let cursorWindow = userInfo["cursorWindow"] as? String, !cursorWindow.isEmpty {
+                metadata["cursorWindow"] = cursorWindow
+            }
             let context = SessionContext(
                 id: "",
                 projectName: userInfo["projectName"] as? String ?? "",
@@ -1486,7 +1515,7 @@ class SessionManager {
                 terminalInfo: terminalInfo,
                 pid: nil,
                 ttyName: ttyName.isEmpty ? nil : ttyName,
-                metadata: [:]
+                metadata: metadata
             )
             CursorIntegration.activate(session: context)
             return
@@ -1583,6 +1612,10 @@ class SessionManager {
 
         // Special handling for Cursor - delegate to CursorIntegration
         if appName == "Cursor" {
+            var metadata: [String: String] = [:]
+            if let windowName = session.cursorWindow, !windowName.isEmpty {
+                metadata["cursorWindow"] = windowName
+            }
             let context = SessionContext(
                 id: session.id,
                 projectName: session.projectName,
@@ -1590,7 +1623,7 @@ class SessionManager {
                 terminalInfo: session.terminalInfo,
                 pid: session.pid,
                 ttyName: session.ttyName,
-                metadata: [:]
+                metadata: metadata
             )
             CursorIntegration.activate(session: context)
             return

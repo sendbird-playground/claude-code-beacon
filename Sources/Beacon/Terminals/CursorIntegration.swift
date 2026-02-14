@@ -1,15 +1,19 @@
 import Foundation
 import AppKit
-import ApplicationServices
 
 /// Cursor IDE integration
-/// Uses macOS Accessibility API to match windows by workspace/folder name in title.
+/// Uses osascript (AppleScript via subprocess) to find and raise the correct Cursor window by title.
+/// The AXUIElement API does not work reliably for Cursor (Electron/todesktop app),
+/// so we use the same osascript subprocess approach that works for PyCharm.
 public struct CursorIntegration: TerminalIntegration {
     public static let identifier = "Cursor"
     public static let displayName = "Cursor"
 
-    /// Cursor's bundle identifier
-    private static let bundleIdentifier = "com.todesktop.230313mzl4w4u92"
+    /// Cursor's actual bundle identifier (Electron/todesktop)
+    private static let cursorBundleId = "com.todesktop.230313mzl4w4u92"
+
+    /// Process name as seen by System Events
+    private static let cursorProcessName = "Cursor"
 
     private static func log(_ message: String) {
         let logPath = "/tmp/beacon_debug.log"
@@ -29,76 +33,174 @@ public struct CursorIntegration: TerminalIntegration {
 
     public static func matches(processInfo: ProcessInfo) -> Bool {
         let name = processInfo.terminalName.lowercased()
-        // Cursor reports as "vscode" in TERM_PROGRAM, but also match "cursor" directly
-        return name.contains("cursor") || name.contains("vscode")
+        return name.contains("cursor")
     }
 
     public static func extractMetadata(processInfo: ProcessInfo) -> [String: String] {
-        return [:]
+        // Capture the current frontmost Cursor window name at session detection time
+        var metadata: [String: String] = [:]
+        if let windowName = getCursorWindowForDirectory(processInfo.workingDirectory) {
+            metadata["cursorWindow"] = windowName
+            log("extractMetadata: matched window='\(windowName)' for cwd=\(processInfo.workingDirectory)")
+        } else if let frontWindow = getFrontmostCursorWindowName() {
+            metadata["cursorWindow"] = frontWindow
+            log("extractMetadata: fallback to frontmost window='\(frontWindow)'")
+        }
+        return metadata
     }
 
     public static func activate(session: SessionContext) {
-        log("activate: project=\(session.projectName), workDir=\(session.workingDirectory), terminal=\(session.terminalInfo)")
+        log("activate: project=\(session.projectName), workDir=\(session.workingDirectory)")
 
-        // Try Accessibility API window matching first
-        if activateByAccessibility(workingDirectory: session.workingDirectory) {
-            log("Accessibility API succeeded")
+        // Activate Cursor app first
+        guard let cursorApp = NSRunningApplication.runningApplications(
+            withBundleIdentifier: cursorBundleId
+        ).first else {
+            log("Cursor not running (bundle: \(cursorBundleId))")
+            activateApp("Cursor")
             return
         }
 
-        // Fallback: just activate Cursor
-        log("falling back to generic activate")
-        activateApp("Cursor")
+        // Try stored window name from metadata first
+        let storedWindow = session.metadata["cursorWindow"]
+        if let windowName = storedWindow, !windowName.isEmpty {
+            log("trying stored window name: '\(windowName)'")
+            if raiseWindow(containing: windowName) {
+                cursorApp.activate()
+                return
+            }
+        }
+
+        // Try matching by working directory name
+        let dirName = URL(fileURLWithPath: session.workingDirectory).lastPathComponent
+        log("trying directory name: '\(dirName)'")
+        if raiseWindow(containing: dirName) {
+            cursorApp.activate()
+            return
+        }
+
+        // Try matching by project name
+        if session.projectName != dirName {
+            log("trying project name: '\(session.projectName)'")
+            if raiseWindow(containing: session.projectName) {
+                cursorApp.activate()
+                return
+            }
+        }
+
+        // Fallback: just activate Cursor (brings last-active window)
+        log("no matching window found, activating Cursor (last-active window)")
+        cursorApp.activate()
     }
 
-    // MARK: - Accessibility API
+    // MARK: - Window Management via osascript
 
-    /// Find and raise the Cursor window whose title contains the workspace directory name
-    private static func activateByAccessibility(workingDirectory: String) -> Bool {
-        guard let cursorApp = NSRunningApplication.runningApplications(
-            withBundleIdentifier: bundleIdentifier
-        ).first else {
-            log("Accessibility: Cursor not running")
-            return false
-        }
+    /// Raise a Cursor window whose title contains the search term.
+    /// Uses osascript subprocess for reliable window access (AX API doesn't work for Cursor).
+    /// Returns true if a matching window was found and raised.
+    @discardableResult
+    private static func raiseWindow(containing searchTerm: String) -> Bool {
+        let script = """
+            tell application "System Events"
+                tell process "\(cursorProcessName)"
+                    set windowList to every window
+                    repeat with w in windowList
+                        set wName to name of w as text
+                        if wName contains "\(escapeAppleScript(searchTerm))" then
+                            perform action "AXRaise" of w
+                            return "raised:" & wName
+                        end if
+                    end repeat
+                end tell
+            end tell
+            return "not found"
+            """
 
-        let appPid = cursorApp.processIdentifier
-        let appElement = AXUIElementCreateApplication(appPid)
-
-        // Get all windows
-        var windowsRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-              let windows = windowsRef as? [AXUIElement] else {
-            log("Accessibility: could not get windows")
-            return false
-        }
-
-        // Build search term from working directory basename
-        let dirName = URL(fileURLWithPath: workingDirectory).lastPathComponent
-        log("Accessibility: searching \(windows.count) windows for '\(dirName)'")
-
-        for (index, window) in windows.enumerated() {
-            var titleRef: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef) == .success,
-                  let title = titleRef as? String else {
-                continue
-            }
-
-            log("Accessibility: window[\(index)] title='\(title)'")
-
-            // Cursor window titles are like "Beacon - Cursor" or "filename - project - Cursor"
-            if title.contains(dirName) {
-                log("Accessibility: matched window[\(index)]")
-
-                // Raise the window and activate Cursor
-                AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-                cursorApp.activate()
-
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", script]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let result = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if result.hasPrefix("raised:") {
+                let windowName = String(result.dropFirst("raised:".count))
+                log("raiseWindow: raised '\(windowName)' (search: '\(searchTerm)')")
                 return true
             }
+            log("raiseWindow: no window containing '\(searchTerm)'")
+            return false
+        } catch {
+            log("raiseWindow error: \(error)")
+            return false
         }
+    }
 
-        log("Accessibility: no matching window found for '\(dirName)'")
-        return false
+    /// Get the Cursor window name that best matches a working directory.
+    /// Enumerates all Cursor windows and returns the title containing the directory name.
+    private static func getCursorWindowForDirectory(_ workingDirectory: String) -> String? {
+        let dirName = URL(fileURLWithPath: workingDirectory).lastPathComponent
+        let script = """
+            tell application "System Events"
+                tell process "\(cursorProcessName)"
+                    set windowList to every window
+                    repeat with w in windowList
+                        set wName to name of w as text
+                        if wName contains "\(escapeAppleScript(dirName))" then
+                            return wName
+                        end if
+                    end repeat
+                end tell
+            end tell
+            return ""
+            """
+        if let result = runOsascript(script), !result.isEmpty {
+            return result
+        }
+        return nil
+    }
+
+    /// Get the frontmost Cursor window name
+    private static func getFrontmostCursorWindowName() -> String? {
+        let script = """
+            tell application "System Events"
+                tell process "\(cursorProcessName)"
+                    set frontWindowName to name of front window
+                    return frontWindowName
+                end tell
+            end tell
+            """
+        return runOsascript(script)
+    }
+
+    // MARK: - Helpers
+
+    /// Run an osascript and return the trimmed result
+    private static func runOsascript(_ script: String) -> String? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", script]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let result = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (result?.isEmpty == true) ? nil : result
+        } catch {
+            log("runOsascript error: \(error)")
+            return nil
+        }
+    }
+
+    private static func escapeAppleScript(_ s: String) -> String {
+        return s.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
     }
 }
