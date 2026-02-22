@@ -840,6 +840,11 @@ struct SettingsView: View {
 
     @State private var selectedTab = 0
     @State private var pycharmPluginDetected = false
+    @State private var pycharmPluginInstalled = false
+    @State private var cursorExtensionInstalled = false
+    @State private var cursorExtensionActive = false
+    @State private var installMessage: String?
+    @State private var isInstalling = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1007,37 +1012,141 @@ struct SettingsView: View {
                 }
             }
 
-            Section("PyCharm Plugin") {
+            Section("Plugins") {
+                // VS Code Extensions (Cursor, Windsurf, etc.)
                 HStack {
-                    if pycharmPluginDetected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                        Text("Beacon plugin detected")
+                    Text("VS Code")
+                        .frame(width: 70, alignment: .leading)
+                    if cursorExtensionInstalled {
+                        if cursorExtensionActive {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Active")
+                                .font(.caption)
+                        } else {
+                            Image(systemName: "checkmark.circle")
+                                .foregroundColor(.orange)
+                            Text("Installed")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     } else {
-                        Image(systemName: "info.circle")
+                        Image(systemName: "xmark.circle")
                             .foregroundColor(.secondary)
-                        Text("Install plugin for tab navigation")
+                        Text("Not installed")
+                            .font(.caption)
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    Button("Check") {
-                        pycharmPluginDetected = PyCharmIntegration.isPluginAvailable()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-                .onAppear {
-                    DispatchQueue.global(qos: .utility).async {
-                        let available = PyCharmIntegration.isPluginAvailable()
-                        DispatchQueue.main.async {
-                            pycharmPluginDetected = available
+                    if !cursorExtensionInstalled {
+                        Button("Install") {
+                            isInstalling = true
+                            installMessage = nil
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                let (success, error) = CursorIntegration.installExtension()
+                                DispatchQueue.main.async {
+                                    isInstalling = false
+                                    if success {
+                                        cursorExtensionInstalled = true
+                                        installMessage = "VS Code extension installed. Restart your IDE to activate."
+                                    } else {
+                                        installMessage = error ?? "Installation failed"
+                                    }
+                                }
+                            }
                         }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(isInstalling)
+                    }
+                }
+
+                Divider()
+
+                // PyCharm
+                HStack {
+                    Text("PyCharm")
+                        .frame(width: 70, alignment: .leading)
+                    if pycharmPluginInstalled {
+                        if pycharmPluginDetected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Active")
+                                .font(.caption)
+                        } else {
+                            Image(systemName: "checkmark.circle")
+                                .foregroundColor(.orange)
+                            Text("Installed")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        Image(systemName: "xmark.circle")
+                            .foregroundColor(.secondary)
+                        Text("Not installed")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    if !pycharmPluginInstalled {
+                        Button("Install") {
+                            isInstalling = true
+                            installMessage = nil
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                let (success, error) = PyCharmIntegration.installPlugin()
+                                DispatchQueue.main.async {
+                                    isInstalling = false
+                                    if success {
+                                        pycharmPluginInstalled = true
+                                        installMessage = "PyCharm plugin installed. Restart PyCharm to activate."
+                                    } else {
+                                        installMessage = error ?? "Installation failed"
+                                    }
+                                }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(isInstalling)
+                    }
+                }
+
+                if let message = installMessage {
+                    Divider()
+                    HStack {
+                        Image(systemName: message.contains("installed") ? "checkmark.circle" : "exclamationmark.triangle")
+                            .foregroundColor(message.contains("installed") ? .green : .orange)
+                        Text(message)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button {
+                            installMessage = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
         }
         .formStyle(.grouped)
         .padding(.top, 8)
+        .onAppear {
+            DispatchQueue.global(qos: .utility).async {
+                let cursorInstalled = CursorIntegration.isExtensionInstalled()
+                let cursorActive = CursorIntegration.isExtensionActive()
+                let pycharmInstalled = PyCharmIntegration.isPluginInstalled()
+                let pycharmActive = PyCharmIntegration.isPluginAvailable()
+                DispatchQueue.main.async {
+                    cursorExtensionInstalled = cursorInstalled
+                    cursorExtensionActive = cursorActive
+                    pycharmPluginInstalled = pycharmInstalled
+                    pycharmPluginDetected = pycharmActive
+                }
+            }
+        }
     }
 
     // MARK: - Groups Tab

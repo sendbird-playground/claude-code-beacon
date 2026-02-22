@@ -56,52 +56,51 @@ public struct PyCharmIntegration: TerminalIntegration {
         let windowName = session.metadata["pycharmWindow"]
         log("activate: project=\(session.projectName), tabName=\(tabName ?? "nil"), window=\(windowName ?? "nil"), cwd=\(session.workingDirectory)")
 
-        // Strategy 1: Use the JetBrains plugin API (handles both tab switching AND window activation)
+        let targetWindow = windowName ?? session.projectName
+
+        // Resolve which tab to focus (stored from hook or dynamic query)
+        var focusProject: String?
+        var focusTab: String?
+        var focusBasePath: String?
+
         if let tabName = tabName, !tabName.isEmpty {
-            let windowProject = windowName ?? session.projectName
-            if focusViaPlugin(project: windowProject, tabName: tabName, basePath: nil) {
-                log("plugin focused tab '\(tabName)' in project '\(windowProject)' — done")
-                activateJetBrainsApp()
-                // Raise the specific project window (app.activate only brings last-active window)
-                raiseWindow(named: windowProject)
-                return
-            }
-            log("plugin failed with stored tab info, trying basePath match...")
-        }
-
-        log("activate: strategy 1 (stored tab) failed or skipped")
-
-        // Strategy 2: No stored tabName (running session) — dynamically query plugin by working directory
-        if let pluginInfo = queryPluginForProject(workingDirectory: session.workingDirectory) {
+            focusProject = windowName ?? session.projectName
+            focusTab = tabName
+        } else if let pluginInfo = queryPluginForProject(workingDirectory: session.workingDirectory) {
             log("dynamic plugin query found project=\(pluginInfo.project), tab=\(pluginInfo.tabName)")
-            if focusViaPlugin(project: pluginInfo.project, tabName: pluginInfo.tabName, basePath: pluginInfo.basePath) {
-                log("plugin focused via dynamic query — done")
-                activateJetBrainsApp()
-                raiseWindow(named: pluginInfo.project)
-                return
-            }
+            focusProject = pluginInfo.project
+            focusTab = pluginInfo.tabName
+            focusBasePath = pluginInfo.basePath
         }
 
-        log("activate: strategy 2 (dynamic query) failed or not available")
-
-        // Strategy 3: Plugin unavailable — use basePath to focus without tab info
-        if focusViaPlugin(project: windowName ?? session.projectName, tabName: nil, basePath: session.workingDirectory) {
-            log("plugin focused project window only (no tab) — done")
-            activateJetBrainsApp()
-            raiseWindow(named: windowName ?? session.projectName)
-            return
-        }
-
-        log("activate: strategy 3 (project-only) failed")
-        log("plugin not available or all strategies failed, falling back to AppleScript")
-
-        // Strategy 4: Fall back to AppleScript window-level navigation (no tab switching)
+        // Step 1: Bring PyCharm to foreground and raise the correct project window
         activateJetBrainsApp()
         if let windowName = windowName, !windowName.isEmpty {
             raiseWindow(named: windowName)
         } else {
             raiseWindowByProjectName(session.projectName, workingDirectory: session.workingDirectory)
         }
+
+        // Step 2: Focus the terminal tab via plugin (AFTER window raise so it's the last action)
+        if let project = focusProject, let tab = focusTab {
+            if focusViaPlugin(project: project, tabName: tab, basePath: focusBasePath, retryOnFailure: false) {
+                log("plugin focused tab '\(tab)' in project '\(project)' — done")
+                // Re-send after brief delay to reassert terminal focus after window raise settles
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+                    _ = focusViaPlugin(project: project, tabName: tab, basePath: focusBasePath, retryOnFailure: false)
+                    log("plugin re-focused tab '\(tab)' after window settle")
+                }
+                return
+            }
+        }
+
+        // Fallback: try plugin with basePath only
+        if focusViaPlugin(project: targetWindow, tabName: nil, basePath: session.workingDirectory, retryOnFailure: false) {
+            log("plugin focused project window only (no tab) — done")
+            return
+        }
+
+        log("activate: all plugin strategies failed, window already raised via AppleScript")
     }
 
     // MARK: - Plugin API
@@ -231,6 +230,92 @@ public struct PyCharmIntegration: TerminalIntegration {
             return httpCode == "200"
         } catch {
             return false
+        }
+    }
+
+    // MARK: - Plugin Installation
+
+    /// Check if the Beacon JetBrains plugin is installed on disk (regardless of whether IDE is running)
+    public static func isPluginInstalled() -> Bool {
+        let jbPath = NSHomeDirectory() + "/Library/Application Support/JetBrains"
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: jbPath) else {
+            return false
+        }
+        // Check all PyCharm version directories for the plugin
+        for dir in contents where dir.hasPrefix("PyCharm") {
+            let pluginDir = jbPath + "/\(dir)/plugins/beacon-terminal-navigator"
+            if FileManager.default.fileExists(atPath: pluginDir) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Install the Beacon plugin into the latest PyCharm plugins directory.
+    /// Returns (success, errorMessage)
+    public static func installPlugin() -> (Bool, String?) {
+        // Find the plugin zip
+        let zipPaths = [
+            Bundle.main.resourcePath.map { $0 + "/beacon-terminal-navigator-1.0.0.zip" },
+            Bundle.main.bundlePath + "/Contents/Resources/beacon-terminal-navigator-1.0.0.zip",
+        ].compactMap { $0 }
+
+        let repoZipPath = (Bundle.main.bundlePath as NSString)
+            .deletingLastPathComponent + "/plugins/beacon-terminal-navigator/build/distributions/beacon-terminal-navigator-1.0.0.zip"
+
+        let allPaths = zipPaths + [repoZipPath]
+
+        var zipPath: String?
+        for path in allPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                zipPath = path
+                break
+            }
+        }
+
+        guard let foundZip = zipPath else {
+            return (false, "Plugin zip not found")
+        }
+
+        // Find the latest PyCharm version directory
+        let jbPath = NSHomeDirectory() + "/Library/Application Support/JetBrains"
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: jbPath) else {
+            return (false, "JetBrains config directory not found")
+        }
+
+        let pycharmDirs = contents.filter { $0.hasPrefix("PyCharm") }.sorted().reversed()
+        guard let latestPyCharm = pycharmDirs.first else {
+            return (false, "No PyCharm installation found")
+        }
+
+        let pluginsDir = jbPath + "/\(latestPyCharm)/plugins"
+        let targetDir = pluginsDir + "/beacon-terminal-navigator"
+
+        // Create plugins dir if needed
+        try? FileManager.default.createDirectory(atPath: pluginsDir, withIntermediateDirectories: true)
+
+        // Unzip the plugin
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        task.arguments = ["-o", foundZip, "-d", pluginsDir]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            if task.terminationStatus == 0 && FileManager.default.fileExists(atPath: targetDir) {
+                log("installPlugin: success — installed to \(targetDir)")
+                return (true, nil)
+            } else {
+                log("installPlugin: failed — \(output)")
+                return (false, output.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        } catch {
+            log("installPlugin: error — \(error)")
+            return (false, error.localizedDescription)
         }
     }
 

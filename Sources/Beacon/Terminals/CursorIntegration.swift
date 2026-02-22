@@ -1,19 +1,25 @@
 import Foundation
 import AppKit
 
-/// Cursor IDE integration
-/// Uses osascript (AppleScript via subprocess) to find and raise the correct Cursor window by title.
-/// The AXUIElement API does not work reliably for Cursor (Electron/todesktop app),
-/// so we use the same osascript subprocess approach that works for PyCharm.
+/// Cursor IDE integration using Beacon Terminal Navigator extension.
+///
+/// Uses a VS Code extension that runs an HTTP server in each Cursor window.
+/// Each extension instance registers in ~/.beacon-ide/registry.json with:
+/// - windowId, port, pid, workspaceFolders, terminalPids
+///
+/// At session detection: walks the claude process's parent chain to find
+/// which extension instance owns the terminal, stores windowId + port.
+///
+/// At activation: sends POST /focus to the stored port, bringing the
+/// correct Cursor window and terminal to front.
+///
+/// Falls back to `open -a Cursor <workDir>` when the extension is not available.
 public struct CursorIntegration: TerminalIntegration {
     public static let identifier = "Cursor"
     public static let displayName = "Cursor"
 
-    /// Cursor's actual bundle identifier (Electron/todesktop)
     private static let cursorBundleId = "com.todesktop.230313mzl4w4u92"
-
-    /// Process name as seen by System Events
-    private static let cursorProcessName = "Cursor"
+    private static let registryPath = NSHomeDirectory() + "/.beacon-ide/registry.json"
 
     private static func log(_ message: String) {
         let logPath = "/tmp/beacon_debug.log"
@@ -36,171 +42,291 @@ public struct CursorIntegration: TerminalIntegration {
         return name.contains("cursor")
     }
 
+    // MARK: - Metadata extraction (at session detection time)
+
     public static func extractMetadata(processInfo: ProcessInfo) -> [String: String] {
-        // Capture the current frontmost Cursor window name at session detection time
         var metadata: [String: String] = [:]
-        if let windowName = getCursorWindowForDirectory(processInfo.workingDirectory) {
-            metadata["cursorWindow"] = windowName
-            log("extractMetadata: matched window='\(windowName)' for cwd=\(processInfo.workingDirectory)")
-        } else if let frontWindow = getFrontmostCursorWindowName() {
-            metadata["cursorWindow"] = frontWindow
-            log("extractMetadata: fallback to frontmost window='\(frontWindow)'")
+
+        // Read the extension registry
+        guard let entries = readRegistry() else {
+            log("extractMetadata: no registry file")
+            return metadata
         }
+
+        log("extractMetadata: registry has \(entries.count) entries, claude PID=\(processInfo.pid)")
+
+        // Walk parent chain from claude PID to find the shell PID
+        // that matches a terminal PID in the registry
+        var ancestorPids: [Int32] = []
+        var currentPid = processInfo.pid
+        for _ in 0..<15 {
+            guard let ppid = getParentPid(currentPid), ppid > 1 else { break }
+            ancestorPids.append(ppid)
+            currentPid = ppid
+        }
+
+        log("extractMetadata: ancestor PIDs = \(ancestorPids)")
+
+        // Find registry entry whose terminalPids contains one of our ancestors
+        for entry in entries {
+            let termPids = entry["terminalPids"] as? [Int] ?? []
+            for ancestorPid in ancestorPids {
+                if termPids.contains(Int(ancestorPid)) {
+                    if let windowId = entry["windowId"] as? String,
+                       let port = entry["port"] as? Int {
+                        metadata["cursorWindowId"] = windowId
+                        metadata["cursorPort"] = String(port)
+                        log("extractMetadata: matched windowId=\(windowId) port=\(port) via shell PID=\(ancestorPid)")
+                        return metadata
+                    }
+                }
+            }
+        }
+
+        // Fallback: match by workspace folder
+        for entry in entries {
+            let folders = entry["workspaceFolders"] as? [String] ?? []
+            if folders.contains(processInfo.workingDirectory) {
+                if let windowId = entry["windowId"] as? String,
+                   let port = entry["port"] as? Int {
+                    metadata["cursorWindowId"] = windowId
+                    metadata["cursorPort"] = String(port)
+                    log("extractMetadata: matched windowId=\(windowId) port=\(port) via workspace folder")
+                    return metadata
+                }
+            }
+        }
+
+        log("extractMetadata: no matching registry entry")
         return metadata
     }
+
+    // MARK: - Activation (when user clicks a session)
 
     public static func activate(session: SessionContext) {
         log("activate: project=\(session.projectName), workDir=\(session.workingDirectory)")
 
-        // Activate Cursor app first
-        guard let cursorApp = NSRunningApplication.runningApplications(
-            withBundleIdentifier: cursorBundleId
-        ).first else {
-            log("Cursor not running (bundle: \(cursorBundleId))")
-            activateApp("Cursor")
-            return
-        }
-
-        // Try stored window name from metadata first
-        let storedWindow = session.metadata["cursorWindow"]
-        if let windowName = storedWindow, !windowName.isEmpty {
-            log("trying stored window name: '\(windowName)'")
-            if raiseWindow(containing: windowName) {
-                cursorApp.activate()
+        // Try the extension's focus endpoint using stored port
+        if let portStr = session.metadata["cursorPort"],
+           let port = Int(portStr) {
+            log("trying plugin focus on port \(port)")
+            if sendFocusRequest(port: port) {
+                log("plugin focus succeeded on port \(port)")
+                // Also activate the app to ensure it comes to front
+                if let cursorApp = NSRunningApplication.runningApplications(
+                    withBundleIdentifier: cursorBundleId
+                ).first {
+                    cursorApp.activate()
+                }
                 return
             }
+            log("plugin focus failed on port \(port), trying re-discovery")
         }
 
-        // Try matching by working directory name
-        let dirName = URL(fileURLWithPath: session.workingDirectory).lastPathComponent
-        log("trying directory name: '\(dirName)'")
-        if raiseWindow(containing: dirName) {
-            cursorApp.activate()
-            return
-        }
-
-        // Try matching by project name
-        if session.projectName != dirName {
-            log("trying project name: '\(session.projectName)'")
-            if raiseWindow(containing: session.projectName) {
-                cursorApp.activate()
-                return
+        // Re-discover: the port may have changed since detection
+        if let entry = findRegistryEntry(for: session) {
+            if let port = entry["port"] as? Int {
+                log("re-discovered port \(port), trying focus")
+                if sendFocusRequest(port: port) {
+                    log("re-discovered plugin focus succeeded")
+                    if let cursorApp = NSRunningApplication.runningApplications(
+                        withBundleIdentifier: cursorBundleId
+                    ).first {
+                        cursorApp.activate()
+                    }
+                    return
+                }
             }
         }
 
-        // Fallback: just activate Cursor (brings last-active window)
-        log("no matching window found, activating Cursor (last-active window)")
-        cursorApp.activate()
+        // Fallback: use `open -a Cursor <workDir>`
+        let workDir = session.workingDirectory
+        if !workDir.isEmpty {
+            log("falling back to open -a Cursor '\(workDir)'")
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            task.arguments = ["-a", "Cursor", workDir]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            do {
+                try task.run()
+                task.waitUntilExit()
+                if task.terminationStatus == 0 {
+                    log("open -a Cursor succeeded")
+                    return
+                }
+            } catch {}
+        }
+
+        log("all strategies failed, generic activate")
+        activateApp("Cursor")
     }
 
-    // MARK: - Window Management via osascript
+    // MARK: - Registry
 
-    /// Raise a Cursor window whose title contains the search term.
-    /// Uses osascript subprocess for reliable window access (AX API doesn't work for Cursor).
-    /// Returns true if a matching window was found and raised.
-    @discardableResult
-    private static func raiseWindow(containing searchTerm: String) -> Bool {
-        let script = """
-            tell application "System Events"
-                tell process "\(cursorProcessName)"
-                    set windowList to every window
-                    repeat with w in windowList
-                        set wName to name of w as text
-                        if wName contains "\(escapeAppleScript(searchTerm))" then
-                            perform action "AXRaise" of w
-                            return "raised:" & wName
-                        end if
-                    end repeat
-                end tell
-            end tell
-            return "not found"
-            """
+    /// Read the Beacon IDE extension registry file
+    private static func readRegistry() -> [[String: Any]]? {
+        guard FileManager.default.fileExists(atPath: registryPath),
+              let data = FileManager.default.contents(atPath: registryPath),
+              let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return nil
+        }
+        return entries
+    }
 
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        task.arguments = ["-e", script]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = FileHandle.nullDevice
-        do {
-            try task.run()
-            task.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let result = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if result.hasPrefix("raised:") {
-                let windowName = String(result.dropFirst("raised:".count))
-                log("raiseWindow: raised '\(windowName)' (search: '\(searchTerm)')")
-                return true
+    /// Find a registry entry matching a session (by windowId, then workspace folder)
+    private static func findRegistryEntry(for session: SessionContext) -> [String: Any]? {
+        guard let entries = readRegistry() else { return nil }
+
+        // Match by stored windowId
+        if let storedWindowId = session.metadata["cursorWindowId"] {
+            for entry in entries {
+                if let wid = entry["windowId"] as? String, wid == storedWindowId {
+                    return entry
+                }
             }
-            log("raiseWindow: no window containing '\(searchTerm)'")
-            return false
-        } catch {
-            log("raiseWindow error: \(error)")
-            return false
         }
-    }
 
-    /// Get the Cursor window name that best matches a working directory.
-    /// Enumerates all Cursor windows and returns the title containing the directory name.
-    private static func getCursorWindowForDirectory(_ workingDirectory: String) -> String? {
-        let dirName = URL(fileURLWithPath: workingDirectory).lastPathComponent
-        let script = """
-            tell application "System Events"
-                tell process "\(cursorProcessName)"
-                    set windowList to every window
-                    repeat with w in windowList
-                        set wName to name of w as text
-                        if wName contains "\(escapeAppleScript(dirName))" then
-                            return wName
-                        end if
-                    end repeat
-                end tell
-            end tell
-            return ""
-            """
-        if let result = runOsascript(script), !result.isEmpty {
-            return result
+        // Match by workspace folder
+        for entry in entries {
+            let folders = entry["workspaceFolders"] as? [String] ?? []
+            if folders.contains(session.workingDirectory) {
+                return entry
+            }
         }
+
         return nil
     }
 
-    /// Get the frontmost Cursor window name
-    private static func getFrontmostCursorWindowName() -> String? {
-        let script = """
-            tell application "System Events"
-                tell process "\(cursorProcessName)"
-                    set frontWindowName to name of front window
-                    return frontWindowName
-                end tell
-            end tell
-            """
-        return runOsascript(script)
-    }
+    // MARK: - Plugin Communication
 
-    // MARK: - Helpers
-
-    /// Run an osascript and return the trimmed result
-    private static func runOsascript(_ script: String) -> String? {
+    /// Send a focus request to the extension's HTTP server
+    private static func sendFocusRequest(port: Int) -> Bool {
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        task.arguments = ["-e", script]
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+        task.arguments = [
+            "-s", "-o", "/dev/null", "-w", "%{http_code}",
+            "--connect-timeout", "1",
+            "--max-time", "3",
+            "-X", "POST",
+            "http://127.0.0.1:\(port)/focus",
+            "-H", "Content-Type: application/json",
+            "-d", "{}"
+        ]
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
         do {
             try task.run()
-            task.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let result = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (result?.isEmpty == true) ? nil : result
+            task.waitUntilExit()
+            let httpCode = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            log("sendFocusRequest port=\(port) HTTP \(httpCode)")
+            return httpCode == "200"
         } catch {
-            log("runOsascript error: \(error)")
-            return nil
+            log("sendFocusRequest error: \(error)")
+            return false
         }
     }
 
-    private static func escapeAppleScript(_ s: String) -> String {
-        return s.replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
+    // MARK: - Extension Detection & Installation
+
+    /// Check if the Beacon VS Code extension is installed in Cursor
+    public static func isExtensionInstalled() -> Bool {
+        let extensionDir = NSHomeDirectory() + "/.cursor/extensions/sendbird.beacon-terminal-navigator-1.0.0"
+        return FileManager.default.fileExists(atPath: extensionDir)
+    }
+
+    /// Check if any registered Cursor extension instance is alive (extension is active)
+    public static func isExtensionActive() -> Bool {
+        guard let entries = readRegistry() else { return false }
+        for entry in entries {
+            let appName = entry["appName"] as? String ?? ""
+            guard appName.lowercased().contains("cursor") else { continue }
+            if let pid = entry["pid"] as? Int, pid > 0 {
+                // Check if the process is still alive
+                let alive = kill(Int32(pid), 0) == 0
+                if alive { return true }
+            }
+        }
+        return false
+    }
+
+    /// Install the Beacon extension into Cursor using the CLI.
+    /// Returns (success, errorMessage)
+    public static func installExtension() -> (Bool, String?) {
+        // Find the VSIX bundled with the app or in the repo
+        let vsixPaths = [
+            Bundle.main.resourcePath.map { $0 + "/beacon-terminal-navigator-1.0.0.vsix" },
+            Bundle.main.bundlePath + "/Contents/Resources/beacon-terminal-navigator-1.0.0.vsix",
+        ].compactMap { $0 }
+
+        // Also check the repo cursor-extension directory relative to the executable
+        let repoVsixPath = (Bundle.main.bundlePath as NSString)
+            .deletingLastPathComponent + "/cursor-extension/beacon-terminal-navigator-1.0.0.vsix"
+
+        let allPaths = vsixPaths + [repoVsixPath]
+
+        var vsixPath: String?
+        for path in allPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                vsixPath = path
+                break
+            }
+        }
+
+        guard let foundVsix = vsixPath else {
+            return (false, "VSIX file not found")
+        }
+
+        // Use Cursor CLI to install
+        let cursorCli = "/usr/local/bin/cursor"
+        guard FileManager.default.fileExists(atPath: cursorCli) else {
+            return (false, "Cursor CLI not found at \(cursorCli)")
+        }
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: cursorCli)
+        task.arguments = ["--install-extension", foundVsix]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            if task.terminationStatus == 0 {
+                log("installExtension: success — \(output)")
+                return (true, nil)
+            } else {
+                log("installExtension: failed — \(output)")
+                return (false, output.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        } catch {
+            log("installExtension: error — \(error)")
+            return (false, error.localizedDescription)
+        }
+    }
+
+    // MARK: - Process Helpers
+
+    /// Get parent PID of a process
+    private static func getParentPid(_ pid: Int32) -> Int32? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/ps")
+        task.arguments = ["-p", "\(pid)", "-o", "ppid="]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            let ppidStr = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return Int32(ppidStr)
+        } catch {
+            return nil
+        }
     }
 }
