@@ -79,6 +79,16 @@ if [ -f "Resources/AppIcon.png" ]; then
     cp "Resources/AppIcon.png" "$OUTPUT_DIR/$BUNDLE_NAME/Contents/Resources/"
 fi
 
+# Copy plugin installers into Resources
+if [ -f "cursor-extension/beacon-terminal-navigator-1.0.0.vsix" ]; then
+    cp "cursor-extension/beacon-terminal-navigator-1.0.0.vsix" "$OUTPUT_DIR/$BUNDLE_NAME/Contents/Resources/"
+    echo "Bundled VS Code extension VSIX"
+fi
+if [ -f "plugins/beacon-terminal-navigator/build/distributions/beacon-terminal-navigator-1.0.0.zip" ]; then
+    cp "plugins/beacon-terminal-navigator/build/distributions/beacon-terminal-navigator-1.0.0.zip" "$OUTPUT_DIR/$BUNDLE_NAME/Contents/Resources/"
+    echo "Bundled PyCharm plugin ZIP"
+fi
+
 # Create PkgInfo
 echo -n "APPL????" > "$OUTPUT_DIR/$BUNDLE_NAME/Contents/PkgInfo"
 

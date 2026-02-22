@@ -843,6 +843,11 @@ struct SettingsView: View {
     @State private var pycharmPluginInstalled = false
     @State private var cursorExtensionInstalled = false
     @State private var cursorExtensionActive = false
+    @State private var vscodeExtensionInstalled = false
+    @State private var vscodeExtensionActive = false
+    @State private var cursorAppInstalled = false
+    @State private var vscodeAppInstalled = false
+    @State private var pycharmAppInstalled = false
     @State private var installMessage: String?
     @State private var isInstalling = false
 
@@ -852,7 +857,7 @@ struct SettingsView: View {
                 .frame(height: 12)
 
             TabView(selection: $selectedTab) {
-                // General Tab - Alerts, About
+                // General Tab - Alerts, Plugins
                 generalTab
                     .tabItem {
                         Label("General", systemImage: "gear")
@@ -872,6 +877,13 @@ struct SettingsView: View {
                         Label("Voice", systemImage: "waveform")
                     }
                     .tag(2)
+
+                // About Tab
+                aboutTab
+                    .tabItem {
+                        Label("About", systemImage: "info.circle")
+                    }
+                    .tag(3)
             }
         }
         .frame(minWidth: 400, minHeight: 370)
@@ -983,9 +995,196 @@ struct SettingsView: View {
                 }
             }
 
-            Section("About") {
+            if cursorAppInstalled || vscodeAppInstalled || pycharmAppInstalled {
+                Section("Plugins") {
+                    VStack(spacing: 6) {
+                        if cursorAppInstalled {
+                            pluginRow(
+                                name: "Cursor",
+                                installed: cursorExtensionInstalled,
+                                active: cursorExtensionActive,
+                                onInstall: {
+                                    isInstalling = true
+                                    installMessage = nil
+                                    DispatchQueue.global(qos: .userInitiated).async {
+                                        let (success, error) = CursorIntegration.installExtension(for: .cursor)
+                                        DispatchQueue.main.async {
+                                            isInstalling = false
+                                            if success {
+                                                cursorExtensionInstalled = true
+                                                installMessage = "Cursor extension installed. Restart Cursor to activate."
+                                            } else {
+                                                installMessage = error ?? "Installation failed"
+                                            }
+                                        }
+                                    }
+                                }
+                            )
+
+                            if vscodeAppInstalled || pycharmAppInstalled {
+                                Divider()
+                            }
+                        }
+
+                        if vscodeAppInstalled {
+                            pluginRow(
+                                name: "VS Code",
+                                installed: vscodeExtensionInstalled,
+                                active: vscodeExtensionActive,
+                                onInstall: {
+                                    isInstalling = true
+                                    installMessage = nil
+                                    DispatchQueue.global(qos: .userInitiated).async {
+                                        let (success, error) = CursorIntegration.installExtension(for: .vscode)
+                                        DispatchQueue.main.async {
+                                            isInstalling = false
+                                            if success {
+                                                vscodeExtensionInstalled = true
+                                                installMessage = "VS Code extension installed. Restart VS Code to activate."
+                                            } else {
+                                                installMessage = error ?? "Installation failed"
+                                            }
+                                        }
+                                    }
+                                }
+                            )
+
+                            if pycharmAppInstalled {
+                                Divider()
+                            }
+                        }
+
+                        if pycharmAppInstalled {
+                            pluginRow(
+                                name: "PyCharm",
+                                installed: pycharmPluginInstalled,
+                                active: pycharmPluginDetected,
+                                onInstall: {
+                                    isInstalling = true
+                                    installMessage = nil
+                                    DispatchQueue.global(qos: .userInitiated).async {
+                                        let (success, error) = PyCharmIntegration.installPlugin()
+                                        DispatchQueue.main.async {
+                                            isInstalling = false
+                                            if success {
+                                                pycharmPluginInstalled = true
+                                                installMessage = "PyCharm plugin installed. Restart PyCharm to activate."
+                                            } else {
+                                                installMessage = error ?? "Installation failed"
+                                            }
+                                        }
+                                    }
+                                }
+                            )
+                        }
+
+                        if let message = installMessage {
+                            Divider()
+                            HStack {
+                                Image(systemName: message.contains("installed") ? "checkmark.circle" : "exclamationmark.triangle")
+                                    .foregroundColor(message.contains("installed") ? .green : .orange)
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Button {
+                                    installMessage = nil
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.caption2)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    Button("Refresh Status") {
+                        refreshPluginStatus()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+        }
+        .formStyle(.grouped)
+        .padding(.top, 8)
+        .onAppear {
+            refreshPluginStatus()
+        }
+    }
+
+    @ViewBuilder
+    private func pluginRow(name: String, installed: Bool, active: Bool, onInstall: @escaping () -> Void) -> some View {
+        HStack {
+            Text(name)
+                .frame(width: 70, alignment: .leading)
+            if installed {
+                if active {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text("Active")
+                        .font(.caption)
+                } else {
+                    Image(systemName: "checkmark.circle")
+                        .foregroundColor(.orange)
+                    Text("Installed")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                Image(systemName: "xmark.circle")
+                    .foregroundColor(.secondary)
+                Text("Not installed")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            if !installed {
+                Button("Install") {
+                    onInstall()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(isInstalling)
+            }
+        }
+    }
+
+    private func refreshPluginStatus() {
+        DispatchQueue.global(qos: .utility).async {
+            let fm = FileManager.default
+            let cursorApp = fm.fileExists(atPath: "/Applications/Cursor.app")
+            let vscodeApp = fm.fileExists(atPath: "/Applications/Visual Studio Code.app")
+            let pycharmApp = (try? fm.contentsOfDirectory(atPath: "/Applications"))?.contains(where: { $0.lowercased().contains("pycharm") && $0.hasSuffix(".app") }) ?? false
+
+            let ci = cursorApp ? CursorIntegration.isExtensionInstalled(for: .cursor) : false
+            let ca = cursorApp ? CursorIntegration.isExtensionActive(for: .cursor) : false
+            let vi = vscodeApp ? CursorIntegration.isExtensionInstalled(for: .vscode) : false
+            let va = vscodeApp ? CursorIntegration.isExtensionActive(for: .vscode) : false
+            let pi = pycharmApp ? PyCharmIntegration.isPluginInstalled() : false
+            let pa = pycharmApp ? PyCharmIntegration.isPluginAvailable() : false
+            DispatchQueue.main.async {
+                cursorAppInstalled = cursorApp
+                vscodeAppInstalled = vscodeApp
+                pycharmAppInstalled = pycharmApp
+                cursorExtensionInstalled = ci
+                cursorExtensionActive = ca
+                vscodeExtensionInstalled = vi
+                vscodeExtensionActive = va
+                pycharmPluginInstalled = pi
+                pycharmPluginDetected = pa
+            }
+        }
+    }
+
+    // MARK: - About Tab
+
+    private var aboutTab: some View {
+        Form {
+            Section("Version") {
                 HStack {
-                    Text("Version")
+                    Text("Current Version")
                     Spacer()
                     Text(SessionManager.appVersion)
                         .foregroundColor(.secondary)
@@ -1012,141 +1211,38 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Plugins") {
-                // VS Code Extensions (Cursor, Windsurf, etc.)
+            Section("Feedback") {
                 HStack {
-                    Text("VS Code")
-                        .frame(width: 70, alignment: .leading)
-                    if cursorExtensionInstalled {
-                        if cursorExtensionActive {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            Text("Active")
-                                .font(.caption)
-                        } else {
-                            Image(systemName: "checkmark.circle")
-                                .foregroundColor(.orange)
-                            Text("Installed")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    } else {
-                        Image(systemName: "xmark.circle")
-                            .foregroundColor(.secondary)
-                        Text("Not installed")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                    Image(systemName: "ladybug")
+                        .foregroundColor(.secondary)
+                    Text("Report a bug or request a feature")
                     Spacer()
-                    if !cursorExtensionInstalled {
-                        Button("Install") {
-                            isInstalling = true
-                            installMessage = nil
-                            DispatchQueue.global(qos: .userInitiated).async {
-                                let (success, error) = CursorIntegration.installExtension()
-                                DispatchQueue.main.async {
-                                    isInstalling = false
-                                    if success {
-                                        cursorExtensionInstalled = true
-                                        installMessage = "VS Code extension installed. Restart your IDE to activate."
-                                    } else {
-                                        installMessage = error ?? "Installation failed"
-                                    }
-                                }
-                            }
+                    Button("Open Issues") {
+                        if let url = URL(string: "https://github.com/sendbird-playground/claude-code-beacon/issues") {
+                            NSWorkspace.shared.open(url)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(isInstalling)
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
 
-                Divider()
-
-                // PyCharm
                 HStack {
-                    Text("PyCharm")
-                        .frame(width: 70, alignment: .leading)
-                    if pycharmPluginInstalled {
-                        if pycharmPluginDetected {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            Text("Active")
-                                .font(.caption)
-                        } else {
-                            Image(systemName: "checkmark.circle")
-                                .foregroundColor(.orange)
-                            Text("Installed")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    } else {
-                        Image(systemName: "xmark.circle")
-                            .foregroundColor(.secondary)
-                        Text("Not installed")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                    Image(systemName: "star")
+                        .foregroundColor(.secondary)
+                    Text("View source code")
                     Spacer()
-                    if !pycharmPluginInstalled {
-                        Button("Install") {
-                            isInstalling = true
-                            installMessage = nil
-                            DispatchQueue.global(qos: .userInitiated).async {
-                                let (success, error) = PyCharmIntegration.installPlugin()
-                                DispatchQueue.main.async {
-                                    isInstalling = false
-                                    if success {
-                                        pycharmPluginInstalled = true
-                                        installMessage = "PyCharm plugin installed. Restart PyCharm to activate."
-                                    } else {
-                                        installMessage = error ?? "Installation failed"
-                                    }
-                                }
-                            }
+                    Button("GitHub") {
+                        if let url = URL(string: "https://github.com/sendbird-playground/claude-code-beacon") {
+                            NSWorkspace.shared.open(url)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(isInstalling)
                     }
-                }
-
-                if let message = installMessage {
-                    Divider()
-                    HStack {
-                        Image(systemName: message.contains("installed") ? "checkmark.circle" : "exclamationmark.triangle")
-                            .foregroundColor(message.contains("installed") ? .green : .orange)
-                        Text(message)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Button {
-                            installMessage = nil
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.caption2)
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
         }
         .formStyle(.grouped)
         .padding(.top, 8)
-        .onAppear {
-            DispatchQueue.global(qos: .utility).async {
-                let cursorInstalled = CursorIntegration.isExtensionInstalled()
-                let cursorActive = CursorIntegration.isExtensionActive()
-                let pycharmInstalled = PyCharmIntegration.isPluginInstalled()
-                let pycharmActive = PyCharmIntegration.isPluginAvailable()
-                DispatchQueue.main.async {
-                    cursorExtensionInstalled = cursorInstalled
-                    cursorExtensionActive = cursorActive
-                    pycharmPluginInstalled = pycharmInstalled
-                    pycharmPluginDetected = pycharmActive
-                }
-            }
-        }
     }
 
     // MARK: - Groups Tab

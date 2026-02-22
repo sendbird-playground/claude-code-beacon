@@ -231,20 +231,46 @@ public struct CursorIntegration: TerminalIntegration {
 
     // MARK: - Extension Detection & Installation
 
-    /// Check if the Beacon VS Code extension is installed in Cursor
-    public static func isExtensionInstalled() -> Bool {
-        let extensionDir = NSHomeDirectory() + "/.cursor/extensions/sendbird.beacon-terminal-navigator-1.0.0"
+    /// VS Code-based IDE targets for extension management
+    public enum IDETarget: String, CaseIterable {
+        case cursor = "Cursor"
+        case vscode = "VS Code"
+
+        var extensionsDir: String {
+            switch self {
+            case .cursor: return NSHomeDirectory() + "/.cursor/extensions"
+            case .vscode: return NSHomeDirectory() + "/.vscode/extensions"
+            }
+        }
+
+        var cliPath: String {
+            switch self {
+            case .cursor: return "/usr/local/bin/cursor"
+            case .vscode: return "/usr/local/bin/code"
+            }
+        }
+
+        var registryAppName: String {
+            switch self {
+            case .cursor: return "cursor"
+            case .vscode: return "code"
+            }
+        }
+    }
+
+    /// Check if the Beacon extension is installed for a given IDE
+    public static func isExtensionInstalled(for target: IDETarget) -> Bool {
+        let extensionDir = target.extensionsDir + "/sendbird.beacon-terminal-navigator-1.0.0"
         return FileManager.default.fileExists(atPath: extensionDir)
     }
 
-    /// Check if any registered Cursor extension instance is alive (extension is active)
-    public static func isExtensionActive() -> Bool {
+    /// Check if any registered extension instance is alive for a given IDE
+    public static func isExtensionActive(for target: IDETarget) -> Bool {
         guard let entries = readRegistry() else { return false }
         for entry in entries {
             let appName = entry["appName"] as? String ?? ""
-            guard appName.lowercased().contains("cursor") else { continue }
+            guard appName.lowercased().contains(target.registryAppName) else { continue }
             if let pid = entry["pid"] as? Int, pid > 0 {
-                // Check if the process is still alive
                 let alive = kill(Int32(pid), 0) == 0
                 if alive { return true }
             }
@@ -252,16 +278,15 @@ public struct CursorIntegration: TerminalIntegration {
         return false
     }
 
-    /// Install the Beacon extension into Cursor using the CLI.
+    /// Install the Beacon extension for a given IDE using its CLI.
     /// Returns (success, errorMessage)
-    public static func installExtension() -> (Bool, String?) {
+    public static func installExtension(for target: IDETarget) -> (Bool, String?) {
         // Find the VSIX bundled with the app or in the repo
         let vsixPaths = [
             Bundle.main.resourcePath.map { $0 + "/beacon-terminal-navigator-1.0.0.vsix" },
             Bundle.main.bundlePath + "/Contents/Resources/beacon-terminal-navigator-1.0.0.vsix",
         ].compactMap { $0 }
 
-        // Also check the repo cursor-extension directory relative to the executable
         let repoVsixPath = (Bundle.main.bundlePath as NSString)
             .deletingLastPathComponent + "/cursor-extension/beacon-terminal-navigator-1.0.0.vsix"
 
@@ -279,14 +304,13 @@ public struct CursorIntegration: TerminalIntegration {
             return (false, "VSIX file not found")
         }
 
-        // Use Cursor CLI to install
-        let cursorCli = "/usr/local/bin/cursor"
-        guard FileManager.default.fileExists(atPath: cursorCli) else {
-            return (false, "Cursor CLI not found at \(cursorCli)")
+        let cli = target.cliPath
+        guard FileManager.default.fileExists(atPath: cli) else {
+            return (false, "\(target.rawValue) CLI not found at \(cli)")
         }
 
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: cursorCli)
+        task.executableURL = URL(fileURLWithPath: cli)
         task.arguments = ["--install-extension", foundVsix]
         let pipe = Pipe()
         task.standardOutput = pipe
@@ -297,14 +321,14 @@ public struct CursorIntegration: TerminalIntegration {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
             if task.terminationStatus == 0 {
-                log("installExtension: success — \(output)")
+                log("installExtension(\(target.rawValue)): success — \(output)")
                 return (true, nil)
             } else {
-                log("installExtension: failed — \(output)")
+                log("installExtension(\(target.rawValue)): failed — \(output)")
                 return (false, output.trimmingCharacters(in: .whitespacesAndNewlines))
             }
         } catch {
-            log("installExtension: error — \(error)")
+            log("installExtension(\(target.rawValue)): error — \(error)")
             return (false, error.localizedDescription)
         }
     }
