@@ -2165,15 +2165,14 @@ class SessionManager {
     private func isZoomMicActive() -> Bool {
         guard zoomMuteEnabled, isZoomRunning() else { return false }
 
-        // Use Zoom's menu bar to detect mic mute state.
+        // Use NSAppleScript in-process to inspect Zoom's menu bar via System Events.
+        // This inherits Beacon's Automation permission (unlike osascript subprocess).
         // The Meeting menu contains "Mute audio" when unmuted, "Unmute audio" when muted (English).
         // For Korean: "회의" menu contains "오디오 음소거" when unmuted, "오디오 음소거 해제" when muted.
-        // Menu bar is accessible even when Zoom is in the background.
-        let script = """
+        let scriptSource = """
             tell application "System Events"
                 tell process "zoom.us"
                     try
-                        -- Try English menu first
                         if exists menu bar item "Meeting" of menu bar 1 then
                             set menuItems to name of every menu item of menu 1 of menu bar item "Meeting" of menu bar 1
                             set itemText to menuItems as text
@@ -2183,7 +2182,6 @@ class SessionManager {
                                 return "unmuted"
                             end if
                         end if
-                        -- Try Korean menu
                         if exists menu bar item "회의" of menu bar 1 then
                             set menuItems to name of every menu item of menu 1 of menu bar item "회의" of menu bar 1
                             set itemText to menuItems as text
@@ -2199,34 +2197,23 @@ class SessionManager {
             return "unknown"
             """
 
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        task.arguments = ["-e", script]
-        let pipe = Pipe()
-        let errPipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = errPipe
-        do {
-            try task.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            task.waitUntilExit()
-            let result = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let errMsg = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            debugLog("Zoom mic check result: \(result)")
-            if !errMsg.isEmpty { debugLog("Zoom mic check stderr: \(errMsg)") }
-            switch result {
-            case "unmuted":
-                return true   // mic is live → suppress alerts
-            case "muted":
-                return false  // mic is muted → alerts OK
-            default:
-                // Could not determine state; allow alerts since we can't confirm mic is active
-                debugLog("Zoom mic state unknown, allowing alerts (needs Accessibility permission)")
-                return false
-            }
-        } catch {
-            debugLog("Zoom mic check failed: \(error)")
+        let script = NSAppleScript(source: scriptSource)
+        var errorInfo: NSDictionary?
+        let output = script?.executeAndReturnError(&errorInfo)
+        let result = output?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if let error = errorInfo {
+            debugLog("Zoom mic check error: \(error)")
+        }
+
+        debugLog("Zoom mic check result: \(result)")
+        switch result {
+        case "unmuted":
+            return true   // mic is live → suppress alerts
+        case "muted":
+            return false  // mic is muted → alerts OK
+        default:
+            debugLog("Zoom mic state unknown, allowing alerts")
             return false
         }
     }
@@ -2819,6 +2806,12 @@ class SessionManager {
             selectedEnglishVoice = settings.selectedEnglishVoice
             selectedKoreanVoice = settings.selectedKoreanVoice
             zoomMuteEnabled = settings.zoomMuteEnabled
+
+            // Prompt for Accessibility permission if Zoom mute is enabled but not trusted
+            if zoomMuteEnabled {
+                let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+                AXIsProcessTrustedWithOptions(options)
+            }
         } catch {
             print("Failed to load settings: \(error)")
         }
