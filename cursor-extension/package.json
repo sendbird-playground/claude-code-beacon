@@ -1,0 +1,14 @@
+{
+  "name": "beacon-terminal-navigator",
+  "displayName": "Beacon Terminal Navigator",
+  "description": "Enables Beacon app to navigate to specific Cursor IDE terminals and windows",
+  "version": "1.0.0",
+  "publisher": "sendbird",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {}
+}

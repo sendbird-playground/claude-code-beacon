@@ -29,6 +29,4 @@ Beacon.app/
 
 # Build artifacts
 *.zip
-
-# Editor extensions (developed separately)
-cursor-extension/
+*.vsix
