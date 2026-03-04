@@ -925,6 +925,7 @@ struct SettingsView: View {
     @State private var newRulePronunciation = ""
     @State private var selectedEnglishVoice: String
     @State private var selectedKoreanVoice: String
+    @State private var zoomMuteEnabled: Bool
 
     init(sessionManager: SessionManager) {
         self.sessionManager = sessionManager
@@ -934,6 +935,7 @@ struct SettingsView: View {
         _voiceEnabled = State(initialValue: sessionManager.voiceEnabled)
         _groups = State(initialValue: sessionManager.groups)
         _pronunciationRules = State(initialValue: sessionManager.pronunciationRules)
+        _zoomMuteEnabled = State(initialValue: sessionManager.zoomMuteEnabled)
 
         // Use saved voice or default to first voice in list (Samantha/Yuna)
         let englishVoices = sessionManager.getEnglishVoices()
@@ -1210,6 +1212,16 @@ struct SettingsView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
+            }
+
+            Section("Experimental") {
+                Toggle("Mute alerts during Zoom calls", isOn: $zoomMuteEnabled)
+                    .onChange(of: zoomMuteEnabled) { new in
+                        sessionManager.zoomMuteEnabled = new
+                    }
+                Text("Suppresses sound and voice alerts when Zoom microphone is active. Notifications still appear silently.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
         }

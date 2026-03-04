@@ -350,6 +350,11 @@ class SessionManager {
         }
     }
 
+    // Experimental: mute Beacon alerts when Zoom mic is active
+    var zoomMuteEnabled: Bool = false {
+        didSet { saveSettings() }
+    }
+
     // Flag to skip notifications on first scan after startup (stale sessions)
     private var isFirstScan: Bool = true
 
@@ -2149,6 +2154,66 @@ class SessionManager {
         return false
     }
 
+    // MARK: - Zoom Meeting Detection (Experimental)
+
+    private func isZoomRunning() -> Bool {
+        return !NSRunningApplication.runningApplications(withBundleIdentifier: "us.zoom.xos").isEmpty
+    }
+
+    /// Check if Zoom is in a meeting with microphone unmuted.
+    /// Returns true if Beacon alerts should be suppressed.
+    private func isZoomMicActive() -> Bool {
+        guard zoomMuteEnabled, isZoomRunning() else { return false }
+
+        // Use System Events to inspect Zoom's meeting toolbar button titles.
+        // When mic is unmuted the button reads "Mute Audio"; when muted it reads "Unmute Audio".
+        // If we can't determine state (no meeting window, permission denied), fall back to
+        // treating any running Zoom instance as potentially in-meeting.
+        let script = """
+            tell application "System Events"
+                tell process "zoom.us"
+                    try
+                        set toolbarButtons to name of every button of every window
+                        set flatList to toolbarButtons as text
+                        if flatList contains "Mute Audio" then
+                            return "unmuted"
+                        else if flatList contains "Unmute Audio" then
+                            return "muted"
+                        end if
+                    end try
+                end tell
+            end tell
+            return "unknown"
+            """
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", script]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            let result = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            debugLog("Zoom mic check result: \(result)")
+            switch result {
+            case "unmuted":
+                return true   // mic is live → suppress alerts
+            case "muted":
+                return false  // mic is muted → alerts OK
+            default:
+                // Could not determine state; safe default: suppress if Zoom is running
+                debugLog("Zoom mic state unknown, assuming active (safe default)")
+                return true
+            }
+        } catch {
+            debugLog("Zoom mic check failed: \(error)")
+            return false
+        }
+    }
+
     private func scheduleNotification(for session: ClaudeSession, debounceInterval: TimeInterval? = nil) {
         let key = session.workingDirectory
         let interval = debounceInterval ?? notificationDebounceInterval
@@ -2217,6 +2282,12 @@ class SessionManager {
         let dndActive = isDNDEnabled()
         debugLog("DND/Focus mode active: \(dndActive)")
 
+        // Check Zoom meeting mic status (experimental)
+        let zoomMicActive = isZoomMicActive()
+        if zoomMicActive {
+            debugLog("Zoom mic active — suppressing sound/voice alerts")
+        }
+
         debugLog("Settings - notify:\(shouldNotify) sound:\(shouldSound) voice:\(shouldVoice)")
         debugLog("Global settings - soundEnabled:\(soundEnabled) voiceEnabled:\(voiceEnabled)")
 
@@ -2256,20 +2327,24 @@ class SessionManager {
             debugLog("Notification suppressed due to DND/Focus mode")
         }
 
-        // Play sound if enabled (suppress if DND active)
-        if shouldSound && !dndActive {
+        // Play sound if enabled (suppress if DND active or Zoom mic active)
+        if shouldSound && !dndActive && !zoomMicActive {
             debugLog("Calling playAlertSound()")
             playAlertSound()
+        } else if zoomMicActive {
+            debugLog("Sound suppressed due to Zoom mic active")
         } else if dndActive {
             debugLog("Sound suppressed due to DND/Focus mode")
         } else {
             debugLog("Sound disabled, not playing")
         }
 
-        // Speak if enabled (suppress if DND active)
-        if shouldVoice && !dndActive {
+        // Speak if enabled (suppress if DND active or Zoom mic active)
+        if shouldVoice && !dndActive && !zoomMicActive {
             debugLog("Calling speakSummary for: \(session.projectName)")
             speakSummary(session)
+        } else if zoomMicActive {
+            debugLog("Voice suppressed due to Zoom mic active")
         } else if dndActive {
             debugLog("Voice suppressed due to DND/Focus mode")
         } else {
@@ -2658,6 +2733,7 @@ class SessionManager {
         var pronunciationRules: [String: String]
         var selectedEnglishVoice: String
         var selectedKoreanVoice: String
+        var zoomMuteEnabled: Bool
 
         // Custom decoder to handle missing keys with defaults
         init(from decoder: Decoder) throws {
@@ -2670,9 +2746,10 @@ class SessionManager {
             pronunciationRules = try container.decodeIfPresent([String: String].self, forKey: .pronunciationRules) ?? [:]
             selectedEnglishVoice = try container.decodeIfPresent(String.self, forKey: .selectedEnglishVoice) ?? ""
             selectedKoreanVoice = try container.decodeIfPresent(String.self, forKey: .selectedKoreanVoice) ?? ""
+            zoomMuteEnabled = try container.decodeIfPresent(Bool.self, forKey: .zoomMuteEnabled) ?? false
         }
 
-        init(notificationEnabled: Bool, soundEnabled: Bool, soundVolume: Float, voiceEnabled: Bool, maxRecentSessions: Int, pronunciationRules: [String: String], selectedEnglishVoice: String, selectedKoreanVoice: String) {
+        init(notificationEnabled: Bool, soundEnabled: Bool, soundVolume: Float, voiceEnabled: Bool, maxRecentSessions: Int, pronunciationRules: [String: String], selectedEnglishVoice: String, selectedKoreanVoice: String, zoomMuteEnabled: Bool) {
             self.notificationEnabled = notificationEnabled
             self.soundEnabled = soundEnabled
             self.soundVolume = soundVolume
@@ -2681,6 +2758,7 @@ class SessionManager {
             self.pronunciationRules = pronunciationRules
             self.selectedEnglishVoice = selectedEnglishVoice
             self.selectedKoreanVoice = selectedKoreanVoice
+            self.zoomMuteEnabled = zoomMuteEnabled
         }
     }
 
@@ -2694,7 +2772,8 @@ class SessionManager {
                 maxRecentSessions: maxRecentSessions,
                 pronunciationRules: pronunciationRules,
                 selectedEnglishVoice: selectedEnglishVoice,
-                selectedKoreanVoice: selectedKoreanVoice
+                selectedKoreanVoice: selectedKoreanVoice,
+                zoomMuteEnabled: zoomMuteEnabled
             )
             let data = try JSONEncoder().encode(settings)
             try data.write(to: settingsURL, options: .atomic)
@@ -2717,6 +2796,7 @@ class SessionManager {
             pronunciationRules = settings.pronunciationRules
             selectedEnglishVoice = settings.selectedEnglishVoice
             selectedKoreanVoice = settings.selectedKoreanVoice
+            zoomMuteEnabled = settings.zoomMuteEnabled
         } catch {
             print("Failed to load settings: \(error)")
         }
