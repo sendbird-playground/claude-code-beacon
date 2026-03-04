@@ -2203,23 +2203,27 @@ class SessionManager {
         task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         task.arguments = ["-e", script]
         let pipe = Pipe()
+        let errPipe = Pipe()
         task.standardOutput = pipe
-        task.standardError = FileHandle.nullDevice
+        task.standardError = errPipe
         do {
             try task.run()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
             task.waitUntilExit()
             let result = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let errMsg = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             debugLog("Zoom mic check result: \(result)")
+            if !errMsg.isEmpty { debugLog("Zoom mic check stderr: \(errMsg)") }
             switch result {
             case "unmuted":
                 return true   // mic is live → suppress alerts
             case "muted":
                 return false  // mic is muted → alerts OK
             default:
-                // Could not determine state; safe default: suppress if Zoom is running
-                debugLog("Zoom mic state unknown, assuming active (safe default)")
-                return true
+                // Could not determine state; allow alerts since we can't confirm mic is active
+                debugLog("Zoom mic state unknown, allowing alerts (needs Accessibility permission)")
+                return false
             }
         } catch {
             debugLog("Zoom mic check failed: \(error)")

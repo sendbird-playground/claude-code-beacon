@@ -1218,8 +1218,16 @@ struct SettingsView: View {
                 Toggle("Mute alerts during Zoom calls", isOn: $zoomMuteEnabled)
                     .onChange(of: zoomMuteEnabled) { new in
                         sessionManager.zoomMuteEnabled = new
+                        if new {
+                            // Prompt for Accessibility permission if not already granted
+                            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+                            let trusted = AXIsProcessTrustedWithOptions(options)
+                            if !trusted {
+                                NSLog("Beacon: Accessibility permission not granted — prompted user")
+                            }
+                        }
                     }
-                Text("Suppresses sound and voice alerts when Zoom microphone is active. Notifications still appear silently.")
+                Text("Suppresses sound and voice alerts when Zoom microphone is active. Requires Accessibility permission.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
