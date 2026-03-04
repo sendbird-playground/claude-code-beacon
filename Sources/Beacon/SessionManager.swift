@@ -2177,10 +2177,10 @@ class SessionManager {
                         if exists menu bar item "Meeting" of menu bar 1 then
                             set menuItems to name of every menu item of menu 1 of menu bar item "Meeting" of menu bar 1
                             set itemText to menuItems as text
-                            if itemText contains "Mute audio" then
-                                return "unmuted"
-                            else if itemText contains "Unmute audio" then
+                            if itemText contains "Unmute audio" then
                                 return "muted"
+                            else if itemText contains "Mute audio" then
+                                return "unmuted"
                             end if
                         end if
                         -- Try Korean menu
