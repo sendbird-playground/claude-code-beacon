@@ -2632,11 +2632,16 @@ class SessionManager {
     func testAlerts() {
         debugLog("Testing alerts with current settings - notification:\(notificationEnabled) sound:\(soundEnabled) voice:\(voiceEnabled)")
 
+        // Check DND and Zoom mic status — test alerts should behave like real alerts
+        let dndActive = isDNDEnabled()
+        let zoomMicActive = isZoomMicActive()
+        debugLog("Test alerts - DND:\(dndActive) ZoomMicActive:\(zoomMicActive)")
+
         // Generate a unique test session ID for this test
         let testSessionId = "test-\(UUID().uuidString)"
 
-        // Test notification if enabled
-        if notificationEnabled {
+        // Test notification if enabled (suppress if DND active)
+        if notificationEnabled && !dndActive {
             let content = UNMutableNotificationContent()
             content.title = "Beacon Test"
             content.body = "Test alert from Beacon"
@@ -2662,13 +2667,13 @@ class SessionManager {
             }
         }
 
-        // Test sound if enabled
-        if soundEnabled {
+        // Test sound if enabled (suppress if DND or Zoom mic active)
+        if soundEnabled && !dndActive && !zoomMicActive {
             playAlertSound()
         }
 
-        // Test voice if enabled
-        if voiceEnabled {
+        // Test voice if enabled (suppress if DND or Zoom mic active)
+        if voiceEnabled && !dndActive && !zoomMicActive {
             testVoice()
         }
     }
