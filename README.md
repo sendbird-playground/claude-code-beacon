@@ -13,10 +13,11 @@ A macOS menu bar app that monitors Claude Code sessions and notifies you when ta
 - **Task Completion Alerts**: Notification, sound, and voice alerts (individually toggleable)
 - **Quick Navigation**: Click to jump directly to the terminal/IDE where the task completed
 - **Multi-App Support**: Works with WezTerm, iTerm2, Terminal.app, VS Code, Cursor, PyCharm, and more
-- **PyCharm Plugin**: Optional JetBrains plugin for reliable terminal tab navigation (no AX permissions needed)
 
 ### Session Management
-- **Session Groups**: Organize sessions into color-coded groups
+- **Session Groups**: Organize sessions into color-coded groups with custom names
+- **Group by Application**: Toggle view to organize sessions by terminal/IDE (Cursor, VS Code, PyCharm, etc.)
+- **Collapsible Groups**: Expand/collapse groups to show or hide sessions
 - **Drag & Drop**: Reorder sessions within groups or move between groups
 - **Per-Session Settings**: Override notification, sound, and voice settings per session
 - **Per-Group Settings**: Set default overrides for all sessions in a group
@@ -26,11 +27,16 @@ A macOS menu bar app that monitors Claude Code sessions and notifies you when ta
 - **Language Detection**: Automatically uses Korean voice for Korean text, English for English
 - **Pronunciation Rules**: Define custom pronunciations (e.g., "vitess" → "vitesse")
 
+### IDE Plugins
+- **Cursor Extension**: Beacon Terminal Navigator extension for reliable terminal tab navigation
+- **VS Code Extension**: Shared extension for VS Code terminal integration
+- **PyCharm Plugin**: Optional JetBrains plugin for terminal tab navigation (no AX permissions needed)
+- **Plugin Management**: Auto-detect, one-click install, and status indicators in Settings → About
+
 ### Smart Features
 - **Zoom Meeting Auto-Mute**: Suppresses alerts when Zoom microphone is active (supports English and Korean locales)
 - **DND Awareness**: Automatically suppresses sound and voice when Focus/Do Not Disturb is active
 - **Auto-Update**: Checks for updates from git hourly, one-click update with automatic restart
-- **Unknown Sessions**: Shows "Last task: unknown" for sessions detected mid-run (before Beacon started)
 - **Backward Compatibility**: Safely preserves groups and settings across updates
 
 ## Installation
@@ -55,12 +61,13 @@ Access via **⚙️** gear icon in the popover header:
 
 ### Alerts
 - **Notification** - macOS notification banner
-- **Sound** - Glass alert sound
+- **Sound** - Glass alert sound with volume control
 - **Voice** - Speaks project name aloud
+- **Zoom Auto-Mute** - Suppress alerts during Zoom meetings
 - **Test buttons** - Test sound and voice
 
 ### Groups
-- Create groups with custom names and colors
+- Create groups with custom names and colors (5 presets + custom hex)
 - Double-click to edit group name inline
 - Click color circle to change group color
 - Drag sessions between groups
@@ -70,20 +77,10 @@ Access via **⚙️** gear icon in the popover header:
 - Click to edit pattern or pronunciation inline
 - Useful for technical terms or non-English words
 
-### Auto-Update
-- Automatically checks GitHub releases hourly for updates
-- Shows notification when new version is available
-- One-click to view release page and download
-
-### PyCharm Plugin (optional)
-
-For reliable terminal tab navigation in PyCharm/JetBrains IDEs, install the companion plugin:
-
-1. Build: `cd plugins/beacon-terminal-navigator && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew buildPlugin`
-2. Install: PyCharm → Settings → Plugins → ⚙ → Install from Disk → select `build/distributions/beacon-terminal-navigator-1.0.0.zip`
-3. Restart PyCharm
-
-The plugin runs a local HTTP server on `127.0.0.1:19877`. Beacon auto-detects it and uses native IDE APIs to switch terminal tabs.
+### About
+- Version info and auto-update status
+- Plugin detection and one-click installation (Cursor, VS Code, PyCharm)
+- Links to GitHub repository and issues
 
 ## Start at Login
 
