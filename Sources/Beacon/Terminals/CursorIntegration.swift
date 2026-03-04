@@ -258,24 +258,54 @@ public struct CursorIntegration: TerminalIntegration {
         }
     }
 
-    /// Check if the Beacon extension is installed for a given IDE
+    /// Check if the Beacon extension is installed for a given IDE (any version)
     public static func isExtensionInstalled(for target: IDETarget) -> Bool {
-        let extensionDir = target.extensionsDir + "/sendbird.beacon-terminal-navigator-1.0.0"
-        return FileManager.default.fileExists(atPath: extensionDir)
+        let extensionsDir = target.extensionsDir
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: extensionsDir) else {
+            return false
+        }
+        return contents.contains { $0.hasPrefix("sendbird.beacon-terminal-navigator-") }
     }
 
-    /// Check if any registered extension instance is alive for a given IDE
+    /// Check if any registered extension instance is actually responding for a given IDE.
+    /// Pings the extension's HTTP server instead of just checking PID liveness,
+    /// because the extension-host process stays alive even when the extension is disabled.
     public static func isExtensionActive(for target: IDETarget) -> Bool {
         guard let entries = readRegistry() else { return false }
         for entry in entries {
             let appName = entry["appName"] as? String ?? ""
             guard appName.lowercased().contains(target.registryAppName) else { continue }
-            if let pid = entry["pid"] as? Int, pid > 0 {
-                let alive = kill(Int32(pid), 0) == 0
-                if alive { return true }
+            if let port = entry["port"] as? Int, port > 0 {
+                if pingExtension(port: port) { return true }
             }
         }
         return false
+    }
+
+    /// Ping the extension's HTTP server to verify it's actually running.
+    /// Uses a GET /health request with a short timeout.
+    private static func pingExtension(port: Int) -> Bool {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+        task.arguments = [
+            "-s", "-o", "/dev/null", "-w", "%{http_code}",
+            "--connect-timeout", "1",
+            "--max-time", "2",
+            "http://127.0.0.1:\(port)/health"
+        ]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            let httpCode = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // Accept any successful HTTP response (the server is alive)
+            return httpCode.hasPrefix("2") || httpCode == "404"
+        } catch {
+            return false
+        }
     }
 
     /// Install the Beacon extension for a given IDE using its CLI.

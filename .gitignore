@@ -22,3 +22,13 @@ Beacon.app/
 *.keystore
 .env
 .env.*
+
+# Claude Code / OMC
+.claude/
+.omc/
+
+# Build artifacts
+*.zip
+
+# Editor extensions (developed separately)
+cursor-extension/

@@ -158,7 +158,8 @@ struct ClaudeSession: Identifiable, Codable {
     var pycharmWindow: String? // PyCharm window/project name
     var pycharmTabName: String? // PyCharm terminal tab name (e.g., "로컬 (2)")
     var itermSessionId: String? // iTerm2 session ID for pane navigation
-    var cursorWindow: String?   // Cursor window title for window matching
+    var cursorWindowId: String?  // Cursor extension window ID for precise matching
+    var cursorPort: String?      // Cursor extension HTTP port for focus requests
 
     // Per-session settings overrides (nil = use global setting)
     var notificationOverride: Bool?
@@ -198,7 +199,8 @@ struct ClaudeSession: Identifiable, Codable {
         pycharmWindow: String? = nil,
         pycharmTabName: String? = nil,
         itermSessionId: String? = nil,
-        cursorWindow: String? = nil,
+        cursorWindowId: String? = nil,
+        cursorPort: String? = nil,
         notificationOverride: Bool? = nil,
         soundOverride: Bool? = nil,
         voiceOverride: Bool? = nil,
@@ -225,7 +227,8 @@ struct ClaudeSession: Identifiable, Codable {
         self.pycharmWindow = pycharmWindow
         self.pycharmTabName = pycharmTabName
         self.itermSessionId = itermSessionId
-        self.cursorWindow = cursorWindow
+        self.cursorWindowId = cursorWindowId
+        self.cursorPort = cursorPort
         self.notificationOverride = notificationOverride
         self.soundOverride = soundOverride
         self.voiceOverride = voiceOverride
@@ -256,7 +259,8 @@ struct ClaudeSession: Identifiable, Codable {
         pycharmWindow = try container.decodeIfPresent(String.self, forKey: .pycharmWindow)
         pycharmTabName = try container.decodeIfPresent(String.self, forKey: .pycharmTabName)
         itermSessionId = try container.decodeIfPresent(String.self, forKey: .itermSessionId)
-        cursorWindow = try container.decodeIfPresent(String.self, forKey: .cursorWindow)
+        cursorWindowId = try container.decodeIfPresent(String.self, forKey: .cursorWindowId)
+        cursorPort = try container.decodeIfPresent(String.self, forKey: .cursorPort)
         notificationOverride = try container.decodeIfPresent(Bool.self, forKey: .notificationOverride)
         soundOverride = try container.decodeIfPresent(Bool.self, forKey: .soundOverride)
         voiceOverride = try container.decodeIfPresent(Bool.self, forKey: .voiceOverride)
@@ -613,7 +617,8 @@ class SessionManager {
         let pycharmWindow = json["pycharmWindow"] as? String
         let pycharmTabName = json["pycharmTabName"] as? String
         let itermSessionId = json["itermSessionId"] as? String
-        let cursorWindow = json["cursorWindow"] as? String
+        let cursorWindowId = json["cursorWindowId"] as? String
+        let cursorPort = json["cursorPort"] as? String
         let isSubagent = json["isSubagent"] as? String == "true"
         let siblingCount = Int(json["siblingCount"] as? String ?? "0") ?? 0
 
@@ -659,7 +664,8 @@ class SessionManager {
                 self.sessions[index].pycharmWindow = pycharmWindow
                 self.sessions[index].pycharmTabName = pycharmTabName
                 self.sessions[index].itermSessionId = itermSessionId
-                self.sessions[index].cursorWindow = cursorWindow
+                self.sessions[index].cursorWindowId = cursorWindowId
+                self.sessions[index].cursorPort = cursorPort
                 self.sessions[index].isSubagentStop = isSubagent
                 self.sessions[index].status = .completed
                 self.sessions[index].completedAt = Date()
@@ -687,7 +693,8 @@ class SessionManager {
                     pycharmWindow: pycharmWindow,
                     pycharmTabName: pycharmTabName,
                     itermSessionId: itermSessionId,
-                    cursorWindow: cursorWindow,
+                    cursorWindowId: cursorWindowId,
+                    cursorPort: cursorPort,
                     groupId: inheritedGroupId,
                     isSubagentStop: isSubagent
                 )
@@ -733,6 +740,18 @@ class SessionManager {
         scanQueue.async { [weak self] in
             self?.scanForSessions()
         }
+    }
+
+    /// Thread-safe snapshot of current sessions. Synchronizes with scanQueue to prevent
+    /// data races when the main thread reads while a background scan is modifying sessions.
+    func getSessionsSnapshot() -> [ClaudeSession] {
+        return scanQueue.sync { self.sessions }
+    }
+
+    /// Non-blocking read of last known sessions. May be slightly stale if a scan is
+    /// in progress, but avoids blocking the main thread for instant UI display.
+    var cachedSessions: [ClaudeSession] {
+        return sessions
     }
 
     func startMonitoring() {
@@ -907,11 +926,13 @@ class SessionManager {
                 }
 
                 // Get Cursor window info if this is a Cursor session
-                var cursorWindow: String? = nil
+                var cursorWindowId: String? = nil
+                var cursorPort: String? = nil
                 if process.terminal == "Cursor" {
                     let processInfo = ProcessInfo(pid: process.pid, workingDirectory: process.cwd, terminalName: process.terminal, ttyName: process.ttyName)
                     let metadata = CursorIntegration.extractMetadata(processInfo: processInfo)
-                    cursorWindow = metadata["cursorWindow"]
+                    cursorWindowId = metadata["cursorWindowId"]
+                    cursorPort = metadata["cursorPort"]
                 }
 
                 // Inherit groupId from previous session with same terminal and working directory
@@ -936,7 +957,8 @@ class SessionManager {
                     ttyName: process.ttyName,
                     pycharmWindow: pycharmWindow,
                     pycharmTabName: pycharmTabName,
-                    cursorWindow: cursorWindow,
+                    cursorWindowId: cursorWindowId,
+                    cursorPort: cursorPort,
                     groupId: inheritedGroupId,
                     detectedMidRun: true  // Session was already running when detected
                 )
@@ -1505,8 +1527,11 @@ class SessionManager {
         // Cursor
         if terminalInfo == "Cursor" {
             var metadata: [String: String] = [:]
-            if let cursorWindow = userInfo["cursorWindow"] as? String, !cursorWindow.isEmpty {
-                metadata["cursorWindow"] = cursorWindow
+            if let wid = userInfo["cursorWindowId"] as? String, !wid.isEmpty {
+                metadata["cursorWindowId"] = wid
+            }
+            if let port = userInfo["cursorPort"] as? String, !port.isEmpty {
+                metadata["cursorPort"] = port
             }
             let context = SessionContext(
                 id: "",
@@ -1613,8 +1638,11 @@ class SessionManager {
         // Special handling for Cursor - delegate to CursorIntegration
         if appName == "Cursor" {
             var metadata: [String: String] = [:]
-            if let windowName = session.cursorWindow, !windowName.isEmpty {
-                metadata["cursorWindow"] = windowName
+            if let wid = session.cursorWindowId, !wid.isEmpty {
+                metadata["cursorWindowId"] = wid
+            }
+            if let port = session.cursorPort, !port.isEmpty {
+                metadata["cursorPort"] = port
             }
             let context = SessionContext(
                 id: session.id,
@@ -2067,35 +2095,24 @@ class SessionManager {
 
     // Check if Do Not Disturb / Focus mode is enabled
     private func isDNDEnabled() -> Bool {
-        // Check modern Focus mode (macOS Monterey+)
-        if let focusDefaults = UserDefaults(suiteName: "com.apple.controlcenter") {
-            // Focus mode stores state in various keys
-            if focusDefaults.bool(forKey: "NSStatusItem Visible FocusModes") {
-                // Focus indicator is visible, but we need to check if actually active
-            }
-        }
-
-        // Check legacy DND setting
-        if let ncDefaults = UserDefaults(suiteName: "com.apple.notificationcenterui") {
-            if ncDefaults.bool(forKey: "doNotDisturb") {
-                return true
-            }
-        }
-
-        // Check Focus mode via assertions file
+        // Method 1: Check Focus mode via assertions file (macOS Monterey+)
+        // The data array always exists, but storeAssertionRecords is only
+        // non-empty when a Focus mode is actively engaged.
         let assertionsPath = NSHomeDirectory() + "/Library/DoNotDisturb/DB/Assertions.json"
         if FileManager.default.fileExists(atPath: assertionsPath) {
             if let data = try? Data(contentsOf: URL(fileURLWithPath: assertionsPath)),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let store = json["data"] as? [[String: Any]] {
-                // If there are active assertions, Focus is enabled
-                if !store.isEmpty {
-                    return true
+                for entry in store {
+                    if let records = entry["storeAssertionRecords"] as? [[String: Any]], !records.isEmpty {
+                        debugLog("DND detected via Assertions.json (active assertion records found)")
+                        return true
+                    }
                 }
             }
         }
 
-        // Check ModeConfigurations for active focus
+        // Method 2: Check ModeConfigurations for active focus
         let modeConfigPath = NSHomeDirectory() + "/Library/DoNotDisturb/DB/ModeConfigurations.json"
         if FileManager.default.fileExists(atPath: modeConfigPath) {
             if let data = try? Data(contentsOf: URL(fileURLWithPath: modeConfigPath)),
@@ -2103,11 +2120,31 @@ class SessionManager {
                let modeData = json["data"] as? [[String: Any]] {
                 for mode in modeData {
                     if let isActive = mode["isActive"] as? Bool, isActive {
+                        debugLog("DND detected via ModeConfigurations.json")
                         return true
                     }
                 }
             }
         }
+
+        // Method 3: Fallback — use defaults command to check Focus state
+        // This catches cases where the JSON files are moved or restructured in newer macOS
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        task.arguments = ["-currentHost", "read", "com.apple.notificationcenterui", "doNotDisturb"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            let output = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            if let str = String(data: output, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               str == "1" {
+                debugLog("DND detected via defaults doNotDisturb key")
+                return true
+            }
+        } catch {}
 
         return false
     }
@@ -2129,8 +2166,46 @@ class SessionManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: workItem)
     }
 
+    /// Check if the terminal/IDE app for this session is currently the frontmost application.
+    /// If the user is already looking at it, we can suppress alerts.
+    private func isSessionAppFrontmost(for session: ClaudeSession) -> Bool {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return false }
+        let frontName = (frontApp.localizedName ?? "").lowercased()
+        let frontBundle = (frontApp.bundleIdentifier ?? "").lowercased()
+        let terminal = session.terminalInfo.lowercased()
+
+        // Match terminal name against frontmost app
+        if terminal.contains("cursor") {
+            return frontBundle.contains("cursor") || frontName.contains("cursor")
+        } else if terminal.contains("pycharm") || terminal.contains("jetbrains") {
+            return frontBundle.contains("pycharm") || frontBundle.contains("jetbrains") || frontName.contains("pycharm")
+        } else if terminal.contains("wezterm") {
+            return frontName.contains("wezterm") || frontBundle.contains("wezterm")
+        } else if terminal.contains("iterm") {
+            return frontName.contains("iterm") || frontBundle.contains("iterm")
+        } else if terminal.contains("terminal") {
+            return frontBundle.contains("apple_terminal") || frontName == "terminal"
+        } else if terminal.contains("code") {
+            return frontBundle.contains("vscode") || frontName.contains("visual studio code")
+        }
+        return frontName.contains(terminal)
+    }
+
     func sendCompletionNotification(for session: ClaudeSession) {
         debugLog("sendCompletionNotification called for: \(session.projectName)")
+
+        // Suppress alert if the user is already looking at the terminal/IDE
+        if isSessionAppFrontmost(for: session) {
+            debugLog("Skipping alert — \(session.terminalInfo) is frontmost app, user is already looking at it")
+            // Still record the alert timestamp so the session shows as completed
+            if let index = sessions.firstIndex(where: { $0.id == session.id }) {
+                sessions[index].alertTriggeredAt = Date()
+                saveSessions()
+            }
+            onSessionsChanged?()
+            return
+        }
+
         // Priority: session > group > global
         let group = session.groupId.flatMap { gid in groups.first { $0.id == gid } }
 
@@ -2151,8 +2226,8 @@ class SessionManager {
             saveSessions()
         }
 
-        // Send macOS notification if enabled
-        if shouldNotify {
+        // Send macOS notification if enabled (suppress if DND active)
+        if shouldNotify && !dndActive {
             let content = UNMutableNotificationContent()
             content.title = "Claude Task Completed"
             content.body = "\(session.terminalInfo) · \(session.projectName)"
@@ -2177,6 +2252,8 @@ class SessionManager {
                     debugLog("Notification scheduled successfully for: \(session.projectName)")
                 }
             }
+        } else if dndActive {
+            debugLog("Notification suppressed due to DND/Focus mode")
         }
 
         // Play sound if enabled (suppress if DND active)

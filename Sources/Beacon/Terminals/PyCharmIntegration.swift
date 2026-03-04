@@ -38,7 +38,8 @@ public struct PyCharmIntegration: TerminalIntegration {
         if let pluginInfo = queryPluginForProject(workingDirectory: processInfo.workingDirectory) {
             metadata["pycharmWindow"] = pluginInfo.project
             metadata["pycharmTabName"] = pluginInfo.tabName
-            log("extractMetadata: plugin returned project=\(pluginInfo.project), tab=\(pluginInfo.tabName)")
+            metadata["pycharmBasePath"] = pluginInfo.basePath
+            log("extractMetadata: plugin returned project=\(pluginInfo.project), basePath=\(pluginInfo.basePath), tab=\(pluginInfo.tabName)")
             return metadata
         }
 
@@ -66,6 +67,7 @@ public struct PyCharmIntegration: TerminalIntegration {
         if let tabName = tabName, !tabName.isEmpty {
             focusProject = windowName ?? session.projectName
             focusTab = tabName
+            focusBasePath = session.metadata["pycharmBasePath"]
         } else if let pluginInfo = queryPluginForProject(workingDirectory: session.workingDirectory) {
             log("dynamic plugin query found project=\(pluginInfo.project), tab=\(pluginInfo.tabName)")
             focusProject = pluginInfo.project
@@ -73,28 +75,30 @@ public struct PyCharmIntegration: TerminalIntegration {
             focusBasePath = pluginInfo.basePath
         }
 
-        // Step 1: Bring PyCharm to foreground and raise the correct project window
+        // Step 1: Try plugin-based focus first (plugin knows exact project by basePath).
+        // This avoids AppleScript raising the wrong window when multiple projects
+        // share similar names (e.g., ~/repo/proxysql vs ~/repo/soda-k8s/charts/proxysql).
+        if let project = focusProject, let tab = focusTab {
+            activateJetBrainsApp()
+            if focusViaPlugin(project: project, tabName: tab, basePath: focusBasePath ?? session.workingDirectory, retryOnFailure: true) {
+                log("plugin focused tab '\(tab)' in project '\(project)' — done")
+                return
+            }
+            log("plugin focus failed, falling back to AppleScript")
+        }
+
+        // Step 2: Fallback — use AppleScript to raise window by basePath or name
         activateJetBrainsApp()
-        if let windowName = windowName, !windowName.isEmpty {
+        let basePath = focusBasePath ?? session.metadata["pycharmBasePath"]
+        if let basePath = basePath, !basePath.isEmpty {
+            raiseWindowByBasePath(basePath)
+        } else if let windowName = windowName, !windowName.isEmpty {
             raiseWindow(named: windowName)
         } else {
             raiseWindowByProjectName(session.projectName, workingDirectory: session.workingDirectory)
         }
 
-        // Step 2: Focus the terminal tab via plugin (AFTER window raise so it's the last action)
-        if let project = focusProject, let tab = focusTab {
-            if focusViaPlugin(project: project, tabName: tab, basePath: focusBasePath, retryOnFailure: false) {
-                log("plugin focused tab '\(tab)' in project '\(project)' — done")
-                // Re-send after brief delay to reassert terminal focus after window raise settles
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
-                    _ = focusViaPlugin(project: project, tabName: tab, basePath: focusBasePath, retryOnFailure: false)
-                    log("plugin re-focused tab '\(tab)' after window settle")
-                }
-                return
-            }
-        }
-
-        // Fallback: try plugin with basePath only
+        // Step 3: Try plugin one more time with basePath only
         if focusViaPlugin(project: targetWindow, tabName: nil, basePath: session.workingDirectory, retryOnFailure: false) {
             log("plugin focused project window only (no tab) — done")
             return
@@ -136,18 +140,32 @@ public struct PyCharmIntegration: TerminalIntegration {
                 return nil
             }
 
-            // Find project whose basePath matches the working directory
+            // Find project whose basePath best matches the working directory.
+            // Prefer the most specific (longest basePath) match to avoid
+            // confusing ~/repo/proxysql with ~/repo/soda-k8s/charts/proxysql.
+            var bestMatch: PluginProjectInfo?
+            var bestMatchLength = -1
+
             for entry in json {
                 guard let basePath = entry["basePath"] as? String,
                       let project = entry["project"] as? String,
                       let tabName = entry["tabName"] as? String else { continue }
 
-                if workingDirectory == basePath || workingDirectory.hasPrefix(basePath + "/") || basePath.hasPrefix(workingDirectory + "/") {
-                    let allTabs = entry["tabs"] as? [String] ?? []
+                let allTabs = entry["tabs"] as? [String] ?? []
+
+                if workingDirectory == basePath {
+                    // Exact match — return immediately
                     return PluginProjectInfo(project: project, basePath: basePath, tabName: tabName, allTabs: allTabs)
                 }
+
+                if workingDirectory.hasPrefix(basePath + "/") && basePath.count > bestMatchLength {
+                    bestMatch = PluginProjectInfo(project: project, basePath: basePath, tabName: tabName, allTabs: allTabs)
+                    bestMatchLength = basePath.count
+                } else if basePath.hasPrefix(workingDirectory + "/") && bestMatch == nil {
+                    bestMatch = PluginProjectInfo(project: project, basePath: basePath, tabName: tabName, allTabs: allTabs)
+                }
             }
-            return nil
+            return bestMatch
         } catch {
             log("queryPluginForProject error: \(error)")
             return nil
@@ -386,6 +404,63 @@ public struct PyCharmIntegration: TerminalIntegration {
         } catch {
             log("raiseWindow(\(windowProject)) error: \(error)")
         }
+    }
+
+    /// Raise a PyCharm window using the full basePath for disambiguation.
+    /// PyCharm window titles often include the path when projects share the same name,
+    /// e.g., "proxysql [~/repo/proxysql]" vs "proxysql [~/repo/soda-k8s/charts/proxysql]".
+    /// Falls back to matching the last path component of basePath against window titles.
+    private static func raiseWindowByBasePath(_ basePath: String) {
+        guard let processName = getJetBrainsProcessName() else {
+            log("raiseWindowByBasePath: could not find JetBrains process name")
+            return
+        }
+
+        // Try matching with full basePath first, then last component
+        let lastComponent = URL(fileURLWithPath: basePath).lastPathComponent
+        // Also try parent/name combo for disambiguation (e.g., "charts/proxysql")
+        let parentAndName: String = {
+            let url = URL(fileURLWithPath: basePath)
+            let parent = url.deletingLastPathComponent().lastPathComponent
+            return parent.isEmpty ? lastComponent : "\(parent)/\(lastComponent)"
+        }()
+        let searchTerms = [basePath, parentAndName, lastComponent]
+
+        for term in searchTerms {
+            let script = """
+                tell application "System Events"
+                    tell process "\(processName)"
+                        repeat with w in windows
+                            set wName to name of w as text
+                            if wName contains "\(escapeAppleScript(term))" then
+                                perform action "AXRaise" of w
+                                return "found"
+                            end if
+                        end repeat
+                    end tell
+                end tell
+                return "not found"
+                """
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            task.arguments = ["-e", script]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = FileHandle.nullDevice
+            do {
+                try task.run()
+                task.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let result = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if result == "found" {
+                    log("raiseWindowByBasePath: matched window with term '\(term)'")
+                    return
+                }
+            } catch {
+                log("raiseWindowByBasePath: osascript error for '\(term)': \(error)")
+            }
+        }
+        log("raiseWindowByBasePath: no window found for basePath '\(basePath)'")
     }
 
     private static func raiseWindowByProjectName(_ projectName: String, workingDirectory: String) {

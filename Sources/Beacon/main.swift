@@ -33,6 +33,7 @@ struct SessionsPopoverView: View {
     @ObservedObject var viewModel: SessionsViewModel
     @State private var draggingGroup: SessionGroup?
     @State private var draggingSession: ClaudeSession?
+    @State private var groupByApp: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -45,6 +46,12 @@ struct SessionsPopoverView: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.plain)
+                Button(action: { groupByApp.toggle() }) {
+                    Image(systemName: "rectangle.3.group")
+                        .foregroundColor(groupByApp ? .accentColor : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Group by Application")
                 Button(action: { viewModel.openSettings() }) {
                     Image(systemName: "gear")
                 }
@@ -66,28 +73,39 @@ struct SessionsPopoverView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        // All groups (including empty ones for drop targets)
-                        ForEach(viewModel.sortedGroups, id: \.id) { group in
-                            GroupSectionView(
-                                group: group,
-                                sessions: viewModel.sessions(for: group),
-                                viewModel: viewModel,
-                                draggingSession: $draggingSession,
-                                draggingGroup: $draggingGroup
-                            )
-                            .onDrag {
-                                draggingGroup = group
-                                return NSItemProvider(object: group.id as NSString)
+                        if groupByApp {
+                            // Group by application view
+                            ForEach(viewModel.sessionsByApp(), id: \.appName) { appGroup in
+                                AppGroupSectionView(
+                                    appName: appGroup.appName,
+                                    sessions: appGroup.sessions,
+                                    viewModel: viewModel
+                                )
                             }
-                        }
+                        } else {
+                            // Manual groups view (default)
+                            ForEach(viewModel.sortedGroups, id: \.id) { group in
+                                GroupSectionView(
+                                    group: group,
+                                    sessions: viewModel.sessions(for: group),
+                                    viewModel: viewModel,
+                                    draggingSession: $draggingSession,
+                                    draggingGroup: $draggingGroup
+                                )
+                                .onDrag {
+                                    draggingGroup = group
+                                    return NSItemProvider(object: group.id as NSString)
+                                }
+                            }
 
-                        // Ungrouped sessions (always show when there are groups for drop target)
-                        if !viewModel.ungroupedSessions.isEmpty || !viewModel.sortedGroups.isEmpty {
-                            UngroupedSectionView(
-                                sessions: viewModel.ungroupedSessions,
-                                viewModel: viewModel,
-                                draggingSession: $draggingSession
-                            )
+                            // Ungrouped sessions (always show when there are groups for drop target)
+                            if !viewModel.ungroupedSessions.isEmpty || !viewModel.sortedGroups.isEmpty {
+                                UngroupedSectionView(
+                                    sessions: viewModel.ungroupedSessions,
+                                    viewModel: viewModel,
+                                    draggingSession: $draggingSession
+                                )
+                            }
                         }
                     }
                     .padding(.vertical, 4)
@@ -216,6 +234,78 @@ struct GroupSectionView: View {
             draggingSession: $draggingSession,
             isTargeted: $isTargeted
         ))
+    }
+}
+
+struct AppGroupSectionView: View {
+    let appName: String
+    let sessions: [ClaudeSession]
+    @ObservedObject var viewModel: SessionsViewModel
+    @State private var isExpanded: Bool = true
+    @State private var isHovered = false
+
+    /// SF Symbol icon for known terminal/IDE apps
+    private var appIcon: String {
+        switch appName.lowercased() {
+        case "cursor":
+            return "cursorarrow.rays"
+        case "vs code", "vscode", "code":
+            return "chevron.left.forwardslash.chevron.right"
+        case "pycharm", "intellij", "intellij idea", "webstorm", "goland", "rider", "clion", "rubymine", "phpstorm":
+            return "hammer"
+        case "iterm2":
+            return "terminal"
+        case "wezterm":
+            return "terminal"
+        case "terminal", "terminal.app":
+            return "apple.terminal"
+        default:
+            return "terminal"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // App group header
+            HStack(spacing: 6) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(width: 12)
+
+                Image(systemName: appIcon)
+                    .font(.system(size: 11))
+                    .foregroundColor(.accentColor)
+                    .frame(width: 14)
+
+                Text(appName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.primary)
+
+                Text("\(sessions.count)")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.15))
+                    .cornerRadius(4)
+
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(isHovered ? Color.primary.opacity(0.05) : Color.clear)
+            .contentShape(Rectangle())
+            .onTapGesture { isExpanded.toggle() }
+            .onHover { isHovered = $0 }
+
+            // Sessions
+            if isExpanded {
+                ForEach(sessions, id: \.id) { session in
+                    SessionRowView(session: session, viewModel: viewModel, indented: true)
+                }
+            }
+        }
     }
 }
 
@@ -648,7 +738,14 @@ class SessionsViewModel: ObservableObject {
     }
 
     func refresh() {
-        sessions = sessionManager.sessions
+        sessions = sessionManager.getSessionsSnapshot()
+        groups = sessionManager.groups
+    }
+
+    /// Non-blocking refresh using the last known sessions without waiting on scanQueue.
+    /// Used for instant popover display; a follow-up async scan updates via onSessionsChanged.
+    func refreshFromCache() {
+        sessions = sessionManager.cachedSessions
         groups = sessionManager.groups
     }
 
@@ -674,6 +771,15 @@ class SessionsViewModel: ObservableObject {
         runningSessions
             .filter { $0.groupId == group.id }
             .sorted { $0.orderInGroup < $1.orderInGroup }
+    }
+
+    /// Group running sessions by their parent application (terminalInfo).
+    /// Returns tuples of (appName, sessions) sorted alphabetically by app name.
+    func sessionsByApp() -> [(appName: String, sessions: [ClaudeSession])] {
+        let grouped = Dictionary(grouping: runningSessions) { $0.terminalInfo }
+        return grouped
+            .map { (appName: $0.key, sessions: $0.value.sorted { $0.createdAt > $1.createdAt }) }
+            .sorted { $0.appName.localizedCaseInsensitiveCompare($1.appName) == .orderedAscending }
     }
 
     func formatLastAlert(_ session: ClaudeSession, tick: Int = 0) -> String {
@@ -1789,9 +1895,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         debugLog("window exists: \(window), frame=\(window.frame)")
 
-        viewModel.refresh()
+        // Show popover immediately with cached session data (non-blocking),
+        // then trigger an async rescan that will update the UI when complete.
+        viewModel.refreshFromCache()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         debugLog("popover.show called")
+        sessionManager.triggerScan()  // Async rescan; UI updates via onSessionsChanged callback
 
         // Close popover when clicking outside
         eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
