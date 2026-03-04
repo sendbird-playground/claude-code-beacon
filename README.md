@@ -1,6 +1,6 @@
 # Beacon
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -27,6 +27,7 @@ A macOS menu bar app that monitors Claude Code sessions and notifies you when ta
 - **Pronunciation Rules**: Define custom pronunciations (e.g., "vitess" → "vitesse")
 
 ### Smart Features
+- **Zoom Meeting Auto-Mute**: Suppresses alerts when Zoom microphone is active (supports English and Korean locales)
 - **DND Awareness**: Automatically suppresses sound and voice when Focus/Do Not Disturb is active
 - **Auto-Update**: Checks for updates from git hourly, one-click update with automatic restart
 - **Unknown Sessions**: Shows "Last task: unknown" for sessions detected mid-run (before Beacon started)

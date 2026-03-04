@@ -2165,20 +2165,33 @@ class SessionManager {
     private func isZoomMicActive() -> Bool {
         guard zoomMuteEnabled, isZoomRunning() else { return false }
 
-        // Use System Events to inspect Zoom's meeting toolbar button titles.
-        // When mic is unmuted the button reads "Mute Audio"; when muted it reads "Unmute Audio".
-        // If we can't determine state (no meeting window, permission denied), fall back to
-        // treating any running Zoom instance as potentially in-meeting.
+        // Use Zoom's menu bar to detect mic mute state.
+        // The Meeting menu contains "Mute audio" when unmuted, "Unmute audio" when muted (English).
+        // For Korean: "회의" menu contains "오디오 음소거" when unmuted, "오디오 음소거 해제" when muted.
+        // Menu bar is accessible even when Zoom is in the background.
         let script = """
             tell application "System Events"
                 tell process "zoom.us"
                     try
-                        set toolbarButtons to name of every button of every window
-                        set flatList to toolbarButtons as text
-                        if flatList contains "Mute Audio" then
-                            return "unmuted"
-                        else if flatList contains "Unmute Audio" then
-                            return "muted"
+                        -- Try English menu first
+                        if exists menu bar item "Meeting" of menu bar 1 then
+                            set menuItems to name of every menu item of menu 1 of menu bar item "Meeting" of menu bar 1
+                            set itemText to menuItems as text
+                            if itemText contains "Mute audio" then
+                                return "unmuted"
+                            else if itemText contains "Unmute audio" then
+                                return "muted"
+                            end if
+                        end if
+                        -- Try Korean menu
+                        if exists menu bar item "회의" of menu bar 1 then
+                            set menuItems to name of every menu item of menu 1 of menu bar item "회의" of menu bar 1
+                            set itemText to menuItems as text
+                            if itemText contains "오디오 음소거 해제" then
+                                return "muted"
+                            else if itemText contains "오디오 음소거" then
+                                return "unmuted"
+                            end if
                         end if
                     end try
                 end tell
