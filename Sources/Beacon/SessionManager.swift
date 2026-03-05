@@ -717,7 +717,6 @@ class SessionManager {
     func requestNotificationPermission() {
         let center = UNUserNotificationCenter.current()
 
-        // Log current authorization status before requesting
         center.getNotificationSettings { settings in
             let statusNames = ["notDetermined", "denied", "authorized", "provisional", "ephemeral"]
             let statusName = settings.authorizationStatus.rawValue < statusNames.count
@@ -725,15 +724,20 @@ class SessionManager {
                 : "unknown(\(settings.authorizationStatus.rawValue))"
             debugLog("Notification auth status before request: \(statusName)")
             debugLog("Bundle identifier: \(Bundle.main.bundleIdentifier ?? "nil")")
-        }
 
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            debugLog("Notification permission granted: \(granted)")
-            if let error = error {
-                debugLog("Notification permission error: \(error)")
+            // Only prompt the user if permission has never been decided.
+            guard settings.authorizationStatus == .notDetermined else {
+                return
             }
-            if !granted {
-                debugLog("Notifications denied. Enable in System Settings > Notifications > Beacon")
+
+            center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                debugLog("Notification permission granted: \(granted)")
+                if let error = error {
+                    debugLog("Notification permission error: \(error)")
+                }
+                if !granted {
+                    debugLog("Notifications denied. Enable in System Settings > Notifications > Beacon")
+                }
             }
         }
     }
@@ -909,6 +913,50 @@ class SessionManager {
                 }
             }
 
+            // Backfill missing integration metadata for already-tracked running sessions.
+            // This is important for precise iTerm2 tab navigation (itermSessionId).
+            if hasSessionForPid {
+                let processInfo = ProcessInfo(
+                    pid: process.pid,
+                    workingDirectory: process.cwd,
+                    terminalName: process.terminal,
+                    ttyName: process.ttyName
+                )
+                let metadata = TerminalRegistry.shared.extractMetadata(for: processInfo)
+                if !metadata.isEmpty {
+                    for i in sessions.indices where sessions[i].pid == process.pid && sessions[i].status == .running {
+                        var updated = false
+                        if let sessionId = metadata["itermSessionId"],
+                           !sessionId.isEmpty,
+                           (sessions[i].itermSessionId == nil || sessions[i].itermSessionId?.isEmpty == true) {
+                            sessions[i].itermSessionId = sessionId
+                            updated = true
+                        }
+                        if let tty = metadata["ttyName"],
+                           !tty.isEmpty,
+                           (sessions[i].ttyName == nil || sessions[i].ttyName?.isEmpty == true || sessions[i].ttyName == "??") {
+                            sessions[i].ttyName = tty
+                            updated = true
+                        }
+                        if let wid = metadata["cursorWindowId"],
+                           !wid.isEmpty,
+                           (sessions[i].cursorWindowId == nil || sessions[i].cursorWindowId?.isEmpty == true) {
+                            sessions[i].cursorWindowId = wid
+                            updated = true
+                        }
+                        if let port = metadata["cursorPort"],
+                           !port.isEmpty,
+                           (sessions[i].cursorPort == nil || sessions[i].cursorPort?.isEmpty == true) {
+                            sessions[i].cursorPort = port
+                            updated = true
+                        }
+                        if updated {
+                            needsUIUpdate = true
+                        }
+                    }
+                }
+            }
+
             if !hasSessionForPid {
                 // Truly new PID - create a new session
                 knownPids.insert(process.pid)
@@ -933,11 +981,16 @@ class SessionManager {
                 // Get Cursor window info if this is a Cursor session
                 var cursorWindowId: String? = nil
                 var cursorPort: String? = nil
+                var itermSessionId: String? = nil
+                let processInfo = ProcessInfo(pid: process.pid, workingDirectory: process.cwd, terminalName: process.terminal, ttyName: process.ttyName)
+                let integrationMetadata = TerminalRegistry.shared.extractMetadata(for: processInfo)
+
+                if let sessionId = integrationMetadata["itermSessionId"], !sessionId.isEmpty {
+                    itermSessionId = sessionId
+                }
                 if process.terminal == "Cursor" {
-                    let processInfo = ProcessInfo(pid: process.pid, workingDirectory: process.cwd, terminalName: process.terminal, ttyName: process.ttyName)
-                    let metadata = CursorIntegration.extractMetadata(processInfo: processInfo)
-                    cursorWindowId = metadata["cursorWindowId"]
-                    cursorPort = metadata["cursorPort"]
+                    cursorWindowId = integrationMetadata["cursorWindowId"]
+                    cursorPort = integrationMetadata["cursorPort"]
                 }
 
                 // Inherit groupId from previous session with same terminal and working directory
@@ -962,6 +1015,7 @@ class SessionManager {
                     ttyName: process.ttyName,
                     pycharmWindow: pycharmWindow,
                     pycharmTabName: pycharmTabName,
+                    itermSessionId: itermSessionId,
                     cursorWindowId: cursorWindowId,
                     cursorPort: cursorPort,
                     groupId: inheritedGroupId,
@@ -1575,8 +1629,21 @@ class SessionManager {
         }
 
         // iTerm2
-        if terminalInfo == "iTerm2" {
-            activateApp("iTerm")
+        if terminalInfo == "iTerm" || terminalInfo == "iTerm2" {
+            var metadata: [String: String] = [:]
+            if let sessionId = userInfo["itermSessionId"] as? String, !sessionId.isEmpty {
+                metadata["itermSessionId"] = sessionId
+            }
+            let context = SessionContext(
+                id: "",
+                projectName: userInfo["projectName"] as? String ?? "",
+                workingDirectory: workingDirectory,
+                terminalInfo: terminalInfo,
+                pid: nil,
+                ttyName: ttyName.isEmpty ? nil : ttyName,
+                metadata: metadata
+            )
+            iTerm2Integration.activate(session: context)
             return
         }
 
@@ -2807,10 +2874,10 @@ class SessionManager {
             selectedKoreanVoice = settings.selectedKoreanVoice
             zoomMuteEnabled = settings.zoomMuteEnabled
 
-            // Prompt for Accessibility permission if Zoom mute is enabled but not trusted
-            if zoomMuteEnabled {
-                let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-                AXIsProcessTrustedWithOptions(options)
+            // Do not prompt on app launch/settings load. Prompt only when user explicitly
+            // turns the feature on from Settings.
+            if zoomMuteEnabled && !AXIsProcessTrusted() {
+                NSLog("Beacon: Zoom mute is enabled but Accessibility permission is not granted")
             }
         } catch {
             print("Failed to load settings: \(error)")
@@ -2833,4 +2900,3 @@ class SessionManager {
         }
     }
 }
-

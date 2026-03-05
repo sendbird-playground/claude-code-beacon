@@ -1,6 +1,6 @@
 # Beacon
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.0-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -13,6 +13,7 @@ A macOS menu bar app that monitors Claude Code sessions and notifies you when ta
 - **Task Completion Alerts**: Notification, sound, and voice alerts (individually toggleable)
 - **Quick Navigation**: Click to jump directly to the terminal/IDE where the task completed
 - **Multi-App Support**: Works with WezTerm, iTerm2, Terminal.app, VS Code, Cursor, PyCharm, and more
+- **iTerm2 Tab Navigation**: Click-to-focus navigates to the exact iTerm2 tab/session via session ID, TTY, or working directory matching
 
 ### Session Management
 - **Session Groups**: Organize sessions into color-coded groups with custom names
@@ -34,8 +35,9 @@ A macOS menu bar app that monitors Claude Code sessions and notifies you when ta
 - **Plugin Management**: Auto-detect, one-click install, and status indicators in Settings → About
 
 ### Smart Features
-- **Zoom Meeting Auto-Mute**: Suppresses alerts when Zoom microphone is active (supports English and Korean locales)
+- **Zoom Meeting Auto-Mute**: Suppresses alerts when Zoom microphone is active (supports English and Korean locales); Accessibility permission is prompted only when enabling the feature
 - **DND Awareness**: Automatically suppresses sound and voice when Focus/Do Not Disturb is active
+- **Smart Permission Prompts**: Notification and Accessibility permissions are requested only when needed, not on every launch
 - **Auto-Update**: Checks for updates from git hourly, one-click update with automatic restart
 - **Backward Compatibility**: Safely preserves groups and settings across updates
 
