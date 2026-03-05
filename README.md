@@ -84,6 +84,19 @@ Access via **⚙️** gear icon in the popover header:
 - Plugin detection and one-click installation (Cursor, VS Code, PyCharm)
 - Links to GitHub repository and issues
 
+## Supported Terminals & IDEs
+
+| Application | Detection | Click-to-Focus |
+|---|---|---|
+| **iTerm2** | Auto | Exact tab/session (session ID → TTY → working directory) |
+| **Terminal.app** | Auto | Window & tab by TTY |
+| **WezTerm** | Auto | Pane by TTY |
+| **Cursor** | Auto | Window & terminal tab (via Beacon extension) |
+| **VS Code** | Auto | Window & terminal tab (via Beacon extension) |
+| **PyCharm** | Auto | Window & tab (via Beacon plugin or AX) |
+| **Other JetBrains IDEs** | Auto | Window activation |
+| **Other terminals** | Auto | App activation |
+
 ## Start at Login
 
 System Settings → General → Login Items → Add Beacon
